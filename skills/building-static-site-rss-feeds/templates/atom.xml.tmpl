@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <id>{{.FeedID}}</id>
+  <title>{{.Title}}</title>
+  <updated>{{.Updated}}</updated>
+  <link href="{{.SiteURL}}" rel="alternate" type="text/html"/>
+  <link href="{{.FeedURL}}" rel="self" type="application/atom+xml"/>
+  {{- if .Subtitle}}
+  <subtitle>{{.Subtitle}}</subtitle>
+  {{- end}}
+  {{- if .Author}}
+  <author>
+    <name>{{.Author.Name}}</name>
+    {{- if .Author.Email}}
+    <email>{{.Author.Email}}</email>
+    {{- end}}
+    {{- if .Author.URI}}
+    <uri>{{.Author.URI}}</uri>
+    {{- end}}
+  </author>
+  {{- end}}
+  {{- if .Rights}}
+  <rights>{{.Rights}}</rights>
+  {{- end}}
+  {{- if .Generator}}
+  <generator>{{.Generator}}</generator>
+  {{- end}}
+  {{- if .Icon}}
+  <icon>{{.Icon}}</icon>
+  {{- end}}
+  {{- if .Logo}}
+  <logo>{{.Logo}}</logo>
+  {{- end}}
+  {{- range .Entries}}
+  <entry>
+    <id>{{.ID}}</id>
+    <title>{{.Title}}</title>
+    <updated>{{.Updated}}</updated>
+    <link href="{{.URL}}" rel="alternate" type="text/html"/>
+    {{- if .Published}}
+    <published>{{.Published}}</published>
+    {{- end}}
+    {{- if .Summary}}
+    <summary type="html"><![CDATA[{{.Summary}}]]></summary>
+    {{- end}}
+    {{- if .Content}}
+    <content type="html"><![CDATA[{{.Content}}]]></content>
+    {{- end}}
+    {{- if .Author}}
+    <author>
+      <name>{{.Author.Name}}</name>
+      {{- if .Author.Email}}
+      <email>{{.Author.Email}}</email>
+      {{- end}}
+    </author>
+    {{- end}}
+    {{- range .Categories}}
+    <category term="{{.}}"/>
+    {{- end}}
+  </entry>
+  {{- end}}
+</feed>

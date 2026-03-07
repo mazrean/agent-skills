@@ -1,0 +1,124 @@
+package feed
+
+import (
+	"encoding/xml"
+	"os"
+	"time"
+
+	"github.com/gorilla/feeds"
+)
+
+// SiteConfig holds site-wide configuration for feed generation
+type SiteConfig struct {
+	Title       string
+	Description string
+	SiteURL     string
+	Author      string
+	Email       string
+	Language    string
+}
+
+// Post represents a content item to include in the feed
+type Post struct {
+	Title       string
+	Slug        string
+	Description string
+	Content     string
+	Date        time.Time
+	Categories  []string
+}
+
+// URL returns the absolute URL for the post
+func (p Post) URL(siteURL string) string {
+	return siteURL + "/posts/" + p.Slug
+}
+
+// FeedGenerator generates RSS, Atom, and JSON feeds
+type FeedGenerator struct {
+	config SiteConfig
+}
+
+// NewFeedGenerator creates a new feed generator
+func NewFeedGenerator(config SiteConfig) *FeedGenerator {
+	return &FeedGenerator{config: config}
+}
+
+// Generate creates all feed formats from the given posts
+func (g *FeedGenerator) Generate(posts []Post, outputDir string) error {
+	feed := g.buildFeed(posts)
+
+	// RSS 2.0
+	if err := g.writeRSS(feed, outputDir+"/feed.xml"); err != nil {
+		return err
+	}
+
+	// Atom 1.0
+	if err := g.writeAtom(feed, outputDir+"/atom.xml"); err != nil {
+		return err
+	}
+
+	// JSON Feed
+	if err := g.writeJSON(feed, outputDir+"/feed.json"); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (g *FeedGenerator) buildFeed(posts []Post) *feeds.Feed {
+	now := time.Now()
+
+	feed := &feeds.Feed{
+		Title:       g.config.Title,
+		Link:        &feeds.Link{Href: g.config.SiteURL},
+		Description: g.config.Description,
+		Author:      &feeds.Author{Name: g.config.Author, Email: g.config.Email},
+		Created:     now,
+		Updated:     now,
+	}
+
+	for _, post := range posts {
+		item := &feeds.Item{
+			Title:       post.Title,
+			Link:        &feeds.Link{Href: post.URL(g.config.SiteURL)},
+			Description: post.Description,
+			Content:     post.Content,
+			Id:          post.URL(g.config.SiteURL),
+			Created:     post.Date,
+			Updated:     post.Date,
+		}
+		feed.Items = append(feed.Items, item)
+	}
+
+	return feed
+}
+
+func (g *FeedGenerator) writeRSS(feed *feeds.Feed, path string) error {
+	rss, err := feed.ToRss()
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(rss), 0644)
+}
+
+func (g *FeedGenerator) writeAtom(feed *feeds.Feed, path string) error {
+	atom, err := feed.ToAtom()
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(atom), 0644)
+}
+
+func (g *FeedGenerator) writeJSON(feed *feeds.Feed, path string) error {
+	json, err := feed.ToJSON()
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(json), 0644)
+}
+
+// ValidateXML checks if the generated XML is well-formed
+func ValidateXML(content []byte) error {
+	var v interface{}
+	return xml.Unmarshal(content, &v)
+}
