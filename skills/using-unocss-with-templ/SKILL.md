@@ -25,14 +25,14 @@ npm install -D unocss @unocss/cli
 
 ```ts
 // uno.config.ts
-import { defineConfig, presetUno } from 'unocss'
+import { defineConfig, presetUno } from "unocss";
 
 export default defineConfig({
   presets: [presetUno()],
   content: {
-    filesystem: ['**/*.templ'],
+    filesystem: ["**/*.templ"],
   },
-})
+});
 ```
 
 ### 3. Add Package Scripts
@@ -98,6 +98,7 @@ go build -o app .
 ### UnoCSS Overview
 
 UnoCSS is an atomic CSS engine that:
+
 - Generates CSS on-demand from utility class usage
 - Has no runtime overhead (build-time only)
 - Supports multiple presets (Tailwind-compatible, icons, attributify)
@@ -206,11 +207,13 @@ When classes are fully dynamic, use safelist:
 export default defineConfig({
   safelist: [
     // Always include these
-    'bg-red-500', 'bg-green-500', 'bg-blue-500',
+    "bg-red-500",
+    "bg-green-500",
+    "bg-blue-500",
     // Generate ranges
     ...Array.from({ length: 5 }, (_, i) => `p-${i + 1}`),
   ],
-})
+});
 ```
 
 ## Reference Files
