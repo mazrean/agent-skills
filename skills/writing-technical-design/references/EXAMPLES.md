@@ -6,7 +6,7 @@
 ---
 title: "Push Notifications - Technical Design"
 status: approved
-prd: prd-notifications.md
+prd: skills/prd-notifications/SKILL.md
 last-updated: 2026-03-01
 ---
 
