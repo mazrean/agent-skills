@@ -34,12 +34,16 @@ allowed-tools: Bash, Read, Glob, Grep
 <instructions>
 ## Execution Steps
 
-1. For each task below, check BOTH:
-   - the Verify commands pass
-   - a matching Conventional Commits commit exists in `git log`
-     (e.g. `feat(notifications): ...` referencing Task {N})
-2. Report which tasks are complete, which is current, which are pending
-3. Recommend the next task command to run
+1. Read the **Progress** checklist — `- [x]` entries are the source of
+   truth (each task command flips its own box at commit time).
+2. For the first `- [ ]` task, cross-check with git:
+   - the Verify commands do not yet pass, AND
+   - no matching Conventional Commits commit exists
+     (`git log --grep="Task {N}"`).
+3. If the checklist disagrees with git state, report the drift explicitly
+   rather than silently trusting either side.
+4. Report which tasks are complete, which is current, which are pending
+5. Recommend the next task command to run
 
 ## Progress
 
@@ -97,6 +101,9 @@ Files to create:
 - `internal/notification/model.go`
 - `migrations/005_notifications.sql`
 
+Files to modify:
+- `.claude/commands/notifications/overview.md` (checklist flip only)
+
 Do NOT modify files outside this scope.
 
 ## Steps
@@ -120,13 +127,24 @@ go build ./internal/notification/...
 go vet ./internal/notification/...
 ```
 
+## Update Overview
+
+In `.claude/commands/notifications/overview.md`, flip Task 1's checkbox:
+
+- From: `- [ ] Task 1: Define notification data model → /notifications/task-1-data-model`
+- To:   `- [x] Task 1: Define notification data model → /notifications/task-1-data-model`
+
+Stage this edit together with the task files for one atomic commit.
+
 ## Commit
 
-After verification passes, invoke the `committing-code` skill to create a
-single atomic commit.
+After verification passes and overview is updated, invoke the
+`committing-code` skill to create a single atomic commit.
 
-1. `git status` — confirm only `internal/notification/model.go` and
-   `migrations/005_notifications.sql` are staged.
+1. `git status` — confirm staged files are exactly:
+   - `internal/notification/model.go`
+   - `migrations/005_notifications.sql`
+   - `.claude/commands/notifications/overview.md`
 2. Invoke `committing-code` with this suggested message:
 
    ```text
@@ -136,14 +154,15 @@ single atomic commit.
    Spec refs: FR-1, FR-5
    ```
 
-3. Verify: `git log -1 --stat`.
+3. Verify: `git log -1 --stat` — overview.md must appear in the commit.
 </instructions>
 
 ## Done When
 
 - [ ] Verify commands all pass
+- [ ] overview.md shows `- [x] Task 1: …`
 - [ ] `git status` clean for the task scope
-- [ ] `git log -1` shows the Task 1 commit
+- [ ] `git log -1` shows the Task 1 commit (including overview.md)
 
 ## Safety & Fallback
 
@@ -188,6 +207,7 @@ Files to create or modify:
 - `internal/notification/event/event.go` (create)
 - `internal/notification/event/publisher.go` (create)
 - `internal/handler/order.go` (modify)
+- `.claude/commands/notifications/overview.md` (checklist flip only)
 
 Do NOT modify files outside this scope.
 
@@ -214,10 +234,15 @@ go test ./internal/handler/...
 go vet ./...
 ```
 
+## Update Overview
+
+In `.claude/commands/notifications/overview.md`, flip Task 3's line from
+`- [ ] Task 3: …` to `- [x] Task 3: …`. Stage together with task files.
+
 ## Commit
 
-After verification passes, invoke the `committing-code` skill. Suggested
-message:
+After verification passes and overview is updated, invoke the
+`committing-code` skill. Suggested message:
 
 ```text
 feat(notifications): publish order status change events
@@ -226,14 +251,16 @@ Implements Task 3 (event-wiring) for Push Notifications.
 Spec refs: FR-1, FR-3
 ```
 
-Stage only the files listed in Scope. Verify with `git log -1 --stat`.
+Stage only the files listed in Scope (including overview.md).
+Verify with `git log -1 --stat`.
 </instructions>
 
 ## Done When
 
 - [ ] Verify commands all pass
+- [ ] overview.md shows `- [x] Task 3: …`
 - [ ] `git status` clean for the task scope
-- [ ] `git log -1` shows the Task 3 commit
+- [ ] `git log -1` shows the Task 3 commit (including overview.md)
 
 ## Safety & Fallback
 
@@ -279,6 +306,9 @@ Files to create:
 - `internal/notification/sender/apns.go`
 - `internal/notification/sender/multi.go`
 
+Files to modify:
+- `.claude/commands/notifications/overview.md` (checklist flip only)
+
 Do NOT modify files outside this scope.
 
 ## Steps
@@ -304,10 +334,15 @@ go test ./internal/notification/sender/...
 go vet ./...
 ```
 
+## Update Overview
+
+In `.claude/commands/notifications/overview.md`, flip Task 4's line from
+`- [ ] Task 4: …` to `- [x] Task 4: …`. Stage together with task files.
+
 ## Commit
 
-After verification passes, invoke the `committing-code` skill. Suggested
-message:
+After verification passes and overview is updated, invoke the
+`committing-code` skill. Suggested message:
 
 ```text
 feat(notifications): add FCM and APNs push delivery senders
@@ -316,14 +351,16 @@ Implements Task 4 (push-delivery) for Push Notifications.
 Spec refs: FR-2, FR-5
 ```
 
-Stage only the files listed in Scope. Verify with `git log -1 --stat`.
+Stage only the files listed in Scope (including overview.md).
+Verify with `git log -1 --stat`.
 </instructions>
 
 ## Done When
 
 - [ ] Verify commands all pass
+- [ ] overview.md shows `- [x] Task 4: …`
 - [ ] `git status` clean for the task scope
-- [ ] `git log -1` shows the Task 4 commit
+- [ ] `git log -1` shows the Task 4 commit (including overview.md)
 
 ## Safety & Fallback
 
@@ -437,4 +474,39 @@ Once Task 3 is also done, commit everything in one go.
 ## Commit
 Commit THIS task alone before moving to the next task command.
 Never amend or squash prior task commits.
+```
+
+### Anti-Pattern 7: Overview Checklist Drifts from Git History
+
+```markdown
+<!-- BAD: Task leaves overview.md untouched, so `/feature/overview`
+     misreports progress and nobody can trust the checklist -->
+## Commit
+Just commit the code changes; the overview will be updated manually later.
+
+<!-- BAD: Checklist flip lives in a separate commit -->
+chore(notifications): mark Task 3 as done in overview
+
+<!-- GOOD: Overview flip is part of the SAME atomic commit as the task -->
+## Update Overview
+Flip `- [ ] Task 3: …` to `- [x] Task 3: …` in overview.md, stage it
+together with task files, then commit — one commit contains both the
+change and its "done" marker.
+```
+
+### Anti-Pattern 8: Overview Command Edits the Checklist
+
+```markdown
+<!-- BAD: The overview command mutates its own checklist -->
+<instructions>
+1. For each task, run Verify.
+2. If it passes, edit this file and flip `- [ ]` to `- [x]`.
+</instructions>
+
+<!-- GOOD: Overview is read-only; each task owns its own flip -->
+<instructions>
+1. Read the Progress checklist (source of truth).
+2. Cross-check the first `- [ ]` task against git state; report drift
+   rather than silently editing.
+</instructions>
 ```
