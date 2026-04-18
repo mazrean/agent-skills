@@ -7,6 +7,11 @@
 title: "Push Notifications - Technical Design"
 status: approved
 prd: skills/prd-notifications/SKILL.md
+component-skills:
+  - skills/tech-redis-streams/SKILL.md
+  - skills/tech-fcm-android/SKILL.md
+  - skills/tech-apns-ios/SKILL.md
+  - skills/tech-sqlc/SKILL.md
 last-updated: 2026-03-01
 ---
 
@@ -21,14 +26,14 @@ in stack) over adding a dedicated message broker.
 
 ## Decision Summary
 
-| Decision | Choice | Rationale |
-|----------|--------|-----------|
-| Async mechanism | Redis Streams | Already in infrastructure, XREADGROUP for consumer groups |
-| Android push | FCM via firebase-admin-go | Official SDK, reliable delivery |
-| iOS push | APNs via sideshow/apns2 | Lightweight, well-maintained |
-| Token storage | New device_tokens table | Normalized, supports multi-device |
-| Retry strategy | Exponential backoff, max 3 | Prevents thundering herd on provider outage |
-| Template engine | Go text/template | Simple, no external dependency needed |
+| Decision | Choice | Rationale | Research |
+|----------|--------|-----------|----------|
+| Async mechanism | Redis Streams | Already in infrastructure, XREADGROUP for consumer groups | `skills/tech-redis-streams/` |
+| Android push | FCM via firebase-admin-go | Official SDK, reliable delivery | `skills/tech-fcm-android/` |
+| iOS push | APNs via sideshow/apns2 | Lightweight, well-maintained | `skills/tech-apns-ios/` |
+| Token storage | New device_tokens table | Normalized, supports multi-device | — (no external component) |
+| Retry strategy | Exponential backoff, max 3 | Prevents thundering herd on provider outage | `skills/tech-fcm-android/`, `skills/tech-apns-ios/` |
+| Template engine | Go text/template | Simple, no external dependency needed | — (stdlib) |
 
 ## Component Overview
 
@@ -66,6 +71,7 @@ in stack) over adding a dedicated message broker.
 - **Location**: `internal/notification/consumer/`
 - **Interface**: `Run(ctx context.Context) error` (blocking, long-lived)
 - **Depends on**: NotificationSender, NotificationRepository
+- **Research**: `skills/tech-redis-streams/SKILL.md`
 
 ### Notification Sender (new)
 
@@ -73,6 +79,7 @@ in stack) over adding a dedicated message broker.
 - **Location**: `internal/notification/sender/`
 - **Interface**: See Interface Contracts below
 - **Depends on**: FCM SDK, APNs client, DeviceTokenRepository
+- **Research**: `skills/tech-fcm-android/SKILL.md`, `skills/tech-apns-ios/SKILL.md`
 
 ### Notification Repository (new)
 
@@ -80,6 +87,7 @@ in stack) over adding a dedicated message broker.
 - **Location**: `internal/notification/repository/`
 - **Interface**: sqlc-generated from queries
 - **Depends on**: PostgreSQL
+- **Research**: `skills/tech-sqlc/SKILL.md`
 
 ### Device Token Repository (new)
 
@@ -87,6 +95,7 @@ in stack) over adding a dedicated message broker.
 - **Location**: `internal/notification/device/`
 - **Interface**: sqlc-generated from queries
 - **Depends on**: PostgreSQL
+- **Research**: `skills/tech-sqlc/SKILL.md`
 
 ## Interface Contracts
 
@@ -260,4 +269,168 @@ StatusChangeEvent 1──* Notification
 | 2026-02-15 | Redis Streams over PG LISTEN/NOTIFY | Need durable events | Depends on Redis availability |
 | 2026-02-18 | Separate device_tokens table | Multi-device support | Additional table to maintain |
 | 2026-02-20 | Feature flag for rollout | Risk mitigation | Flag cleanup needed after full rollout |
+```
+
+## Example: Component Research Skill (`skills/tech-redis-streams/SKILL.md`)
+
+This is what a digest produced by the Deep Research phase looks like. The design doc above references this skill; Claude auto-loads it when editing files under `internal/notification/consumer/` or anywhere that calls `go-redis` Stream methods.
+
+```markdown
+---
+name: tech-redis-streams
+description: Redis Streams research digest (server v7.2, go-redis/v9). Covers XADD, XREADGROUP, XACK, XAUTOCLAIM, idle-pending recovery, MAXLEN trimming, and consumer-group failure modes. Use when implementing or reviewing producers / consumers under internal/notification/consumer/ or any code calling go-redis Stream* methods.
+---
+
+# Redis Streams — Research Digest
+
+## TL;DR
+
+Redis Streams provides durable, ordered, at-least-once delivery with
+consumer groups via XREADGROUP. For our push-notification pipeline it
+replaces a message broker at zero infra cost. Main trade-off: at-least-once
+means consumers must be idempotent, and pending entries require periodic
+XAUTOCLAIM sweeps to survive consumer crashes.
+
+## Identity
+
+- **Version**: Redis server 7.2.x; go-redis v9.5.x (verified 2026-02-28)
+- **License**: Redis is under RSALv2/SSPLv1 (7.4+); 7.2 under BSD. go-redis: BSD-2.
+- **Docs**: https://redis.io/docs/latest/develop/data-types/streams/
+- **Source**: https://github.com/redis/go-redis
+- **Minimum runtime**: Go 1.22+ for go-redis v9.5
+
+## API We Use
+
+```go
+// Producer
+xadd := rdb.XAdd(ctx, &redis.XAddArgs{
+    Stream: "notifications",
+    MaxLen: 100_000,   // approximate trim; use `~` semantics
+    Approx: true,
+    Values: map[string]any{"event": payloadJSON},
+})
+
+// Consumer group bootstrap (idempotent)
+_ = rdb.XGroupCreateMkStream(ctx, "notifications", "notification-workers", "$").Err()
+
+// Consumer read
+res, err := rdb.XReadGroup(ctx, &redis.XReadGroupArgs{
+    Group:    "notification-workers",
+    Consumer: consumerID,
+    Streams:  []string{"notifications", ">"},
+    Count:    16,
+    Block:    5 * time.Second,
+}).Result()
+
+// Ack after processing
+_ = rdb.XAck(ctx, "notifications", "notification-workers", entry.ID).Err()
+
+// Recover entries abandoned by crashed consumers
+claimed, _, err := rdb.XAutoClaim(ctx, &redis.XAutoClaimArgs{
+    Stream:   "notifications",
+    Group:    "notification-workers",
+    Consumer: consumerID,
+    MinIdle:  60 * time.Second,
+    Start:    "0-0",
+    Count:    50,
+}).Result()
+```
+
+## Operational Notes
+
+- **Throughput**: ~1M ops/sec on a single-node 7.2 (Redis official benchmark).
+  Our target: <1k events/sec — three orders of magnitude of headroom.
+- **Latency**: sub-millisecond XADD/XACK locally; p99 ~2ms across VPC.
+- **Failure modes**:
+  - Consumer crash → entries stay in PEL (Pending Entries List) until
+    XAUTOCLAIM picks them up. Run sweeper every 30s with MinIdle=60s.
+  - Redis failover → in-flight XREADGROUP returns with partial data;
+    consumer must tolerate duplicate delivery (idempotency key = event_id).
+- **Retry semantics**: none built-in. Our consumer increments a delivery
+  counter per entry; after 3 attempts it moves the entry to a dead-letter
+  stream via XADD + XACK on the original.
+- **Resource cost**: ~100 bytes/entry + field overhead. With MaxLen=100k,
+  budget ~30 MB steady-state.
+
+## Pitfalls
+
+- **MAXLEN without `~` is O(N).** Always set `Approx: true` (`MAXLEN ~ N`)
+  for amortized O(1) trimming. *Source: Redis XADD docs, "Capped streams" section.*
+- **`$` on XGroupCreate only reads new messages.** If the stream exists
+  and has backlog you want to process, use `"0"` instead of `"$"` on first
+  bootstrap. *Source: Redis XGROUP CREATE semantics.*
+- **XREADGROUP `>` vs. explicit ID.** `>` reads only never-delivered
+  entries. Using an explicit ID re-reads from PEL — useful for recovery,
+  but easy to confuse with the normal path.
+- **PEL growth under persistent consumer failure.** Monitor
+  XPENDING summary; alert when idle PEL > threshold.
+- **go-redis v9 renamed several XAdd options.** If porting v8 code,
+  `MaxLenApprox` → `MaxLen + Approx: true`.
+
+## Integration Pattern
+
+```go
+// internal/notification/consumer/consumer.go
+type Consumer struct {
+    rdb      redis.UniversalClient
+    sender   sender.Sender
+    notifRepo NotificationRepository
+    id       string // e.g., hostname + pid
+}
+
+func (c *Consumer) Run(ctx context.Context) error {
+    if err := c.ensureGroup(ctx); err != nil { return err }
+    go c.sweepStale(ctx) // XAUTOCLAIM loop
+    for {
+        if err := ctx.Err(); err != nil { return err }
+        if err := c.readOnce(ctx); err != nil {
+            slog.Error("stream read failed", "err", err)
+            time.Sleep(time.Second) // backoff
+        }
+    }
+}
+```
+
+Consumers run as goroutines inside the main server binary. We considered
+a separate worker binary; rejected for ops simplicity at current scale.
+
+## Alternatives Considered
+
+- **PostgreSQL LISTEN/NOTIFY** — no durable backlog; events lost on crash.
+- **RabbitMQ / NATS** — new infra to operate; overkill at <1k events/sec.
+- **Redis Pub/Sub** — fire-and-forget; no persistence; wrong primitive.
+
+## Confidence
+
+- **High**: API signatures, MAXLEN semantics, PEL behavior — all confirmed
+  against official docs and go-redis v9.5 source.
+- **Medium**: VPC-local p99 latency figure — from a single staging
+  measurement, not a sustained benchmark.
+- **Low**: behavior under Redis cluster failover — we run single-node in
+  prod today; plan to re-verify if we ever move to cluster mode.
+
+## References
+
+- [references/PEL-RECOVERY.md](references/PEL-RECOVERY.md) — sweeper tuning
+  and measured recovery times.
+- [references/FAILOVER-NOTES.md](references/FAILOVER-NOTES.md) — behavior
+  under RDB snapshot + replica promotion.
+```
+
+The corresponding L2 rule that extracts the imperative constraints:
+
+```markdown
+<!-- .claude/rules/notification-consumer.md -->
+---
+paths:
+  - "internal/notification/consumer/**/*.go"
+---
+
+Notification consumer patterns (see skills/tech-redis-streams/):
+- Always pass `Approx: true` when setting XAdd MaxLen.
+- Use `">"` in XReadGroup for normal path; explicit ID only for PEL recovery.
+- Run XAutoClaim sweeper every 30s with MinIdle=60s.
+- Treat delivery as at-least-once: consumer handlers must be idempotent
+  (key on event_id from the payload).
+- After 3 attempts, XAdd to `notifications-dlq` then XAck the original.
 ```
