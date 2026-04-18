@@ -1,87 +1,237 @@
-# Implementation Tasks Examples
+# Implementation Tasks Examples (Command Format)
 
 ## Example: Notification System Tasks
 
+### Directory Structure
+
+```
+.claude/commands/notifications/
+├── overview.md
+├── task-1-data-model.md
+├── task-2-sender-interface.md
+├── task-3-event-wiring.md
+├── task-4-push-delivery.md
+├── task-5-consumer.md
+└── task-6-integration-tests.md
+```
+
+### overview.md
+
 ```markdown
 ---
-title: "Push Notifications - Implementation Tasks"
-status: in-progress
-prd: prd-notifications.md
-design: design-notifications.md
-last-updated: 2026-03-05
+description: Show progress and next steps for push notification implementation
+allowed-tools: Bash, Read, Glob, Grep
 ---
 
-# Push Notifications - Implementation Tasks
+# Push Notifications - Implementation Overview
+
+<background_information>
+- **PRD**: skills/prd-notifications/SKILL.md
+- **Design**: specs/design-notifications.md
+- **Mission**: Track implementation progress and guide to next task
+</background_information>
+
+<instructions>
+## Execution Steps
+
+1. For each task below, check if the verification commands pass
+2. Report which tasks are complete, which is current, which are pending
+3. Recommend the next task command to run
 
 ## Progress
 
-- [x] Task 1: Define notification data model and migrations
-- [x] Task 2: Implement NotificationSender interface
-- [ ] Task 3: Wire up order status change events  <-- current
-- [ ] Task 4: Add push notification delivery (FCM/APNs)
-- [ ] Task 5: Implement notification consumer
-- [ ] Task 6: Integration tests and error handling
+- [ ] Task 1: Define notification data model → `/notifications/task-1-data-model`
+- [ ] Task 2: Implement NotificationSender interface → `/notifications/task-2-sender-interface`
+- [ ] Task 3: Wire up order status change events → `/notifications/task-3-event-wiring`
+- [ ] Task 4: Add push notification delivery (FCM/APNs) → `/notifications/task-4-push-delivery`
+- [ ] Task 5: Implement notification consumer → `/notifications/task-5-consumer`
+- [ ] Task 6: Integration tests and error handling → `/notifications/task-6-integration-tests`
 
-## Task 1: Define notification data model and migrations
+## Dependency Order
 
-- **Status**: done
-- **Commit**: a1b2c3d
+```
+Task 1: Data model (no deps)
+├─► Task 2: Sender interface (depends: Task 1)
+├─► Task 3: Event wiring (depends: Task 1)
+│    └─► Task 5: Consumer (depends: Task 3, Task 4)
+└─► Task 4: Push delivery (depends: Task 2)
+     └─► Task 5: Consumer (depends: Task 3, Task 4)
+          └─► Task 6: Integration tests (depends: Task 5)
+```
+</instructions>
 
-<!-- Details collapsed -->
+## Output Description
+Report: which tasks are done, which is next, and the command to run it.
+```
 
+### task-1-data-model.md
+
+```markdown
+---
+description: Create notification data model and database migrations for push notifications
+allowed-tools: Bash, Read, Write, Edit, Glob, Grep
 ---
 
-## Task 2: Implement NotificationSender interface
+# Task 1: Define notification data model and migrations
 
-- **Status**: done
-- **Commit**: e4f5g6h
+<background_information>
+- **PRD**: skills/prd-notifications/SKILL.md
+- **Design**: specs/design-notifications.md
+- **Depends on**: none
+- **Spec refs**: FR-1, FR-5
+</background_information>
 
-<!-- Details collapsed -->
+<instructions>
+## Core Task
 
+Create the notification data model types and database migration for the
+device_tokens and notifications tables as defined in
+specs/design-notifications.md (Data Model section).
+
+## Scope
+
+Files to create:
+- `internal/notification/model.go`
+- `migrations/005_notifications.sql`
+
+Do NOT modify files outside this scope.
+
+## Steps
+
+1. Read specs/design-notifications.md Data Model section for schema
+2. Create `internal/notification/model.go` with Go struct types:
+   - `Notification` struct matching notifications table
+   - `DeviceToken` struct matching device_tokens table
+   - Platform enum type (FCM, APNs)
+3. Create `migrations/005_notifications.sql` with DDL:
+   - device_tokens table with user_id FK, platform, token, created_at
+   - notifications table with user_id FK, title, body, status, created_at
+   - Appropriate indexes per design doc
+</instructions>
+
+## Done When
+
+Run these verification commands. ALL must pass:
+
+```bash
+go build ./internal/notification/...
+go vet ./internal/notification/...
+```
+
+## Safety & Fallback
+
+- If design doc doesn't exist, report: "Design doc required. Create specs/design-notifications.md first."
+- If migration numbering conflicts, check existing migrations and adjust
+```
+
+### task-3-event-wiring.md
+
+```markdown
+---
+description: Wire up order status change events to notification stream
+allowed-tools: Bash, Read, Write, Edit, Glob, Grep
 ---
 
-## Task 3: Wire up order status change events
+# Task 3: Wire up order status change events
 
-- **Status**: in-progress
-- **Depends on**: Task 1
+<background_information>
+- **PRD**: skills/prd-notifications/SKILL.md
+- **Design**: specs/design-notifications.md
+- **Depends on**: Task 1 (data model — task-1-data-model)
 - **Spec refs**: FR-1, FR-3
-- **Scope**: `internal/handler/order.go`, `internal/notification/event/`
-- **Verify**: `go test ./internal/handler/... ./internal/notification/event/...`
+</background_information>
 
-### What to do
+<instructions>
+## Pre-check
+
+Before starting, verify dependencies are complete:
+1. Check that `internal/notification/model.go` exists (from Task 1)
+2. If missing, report: "Task 1 must be completed first. Run /notifications/task-1-data-model"
+
+## Core Task
+
+Create event types and publisher for order status change events.
+Add event publishing to the order status update handler.
+
+## Scope
+
+Files to create or modify:
+- `internal/notification/event/event.go` (create)
+- `internal/notification/event/publisher.go` (create)
+- `internal/handler/order.go` (modify)
+
+Do NOT modify files outside this scope.
+
+## Steps
 
 1. Create event types in `internal/notification/event/event.go`:
    - Define `OrderStatusChanged` struct matching the event schema
      in specs/design-notifications.md (Event Schema section)
 
-2. Add event publishing to `internal/handler/order.go`:
-   - After successful status update in `UpdateOrderStatus` handler
-   - Publish `OrderStatusChanged` event to Redis Stream "notifications"
-   - Use `XADD` with `MAXLEN ~100000` per design doc decision
-
-3. Create `internal/notification/event/publisher.go`:
+2. Create `internal/notification/event/publisher.go`:
    - `Publisher` struct with `Publish(ctx, event) error` method
    - Accept Redis client via constructor injection
 
-### Done when
+3. Add event publishing to `internal/handler/order.go`:
+   - After successful status update in `UpdateOrderStatus` handler
+   - Publish `OrderStatusChanged` event to Redis Stream "notifications"
+   - Use `XADD` with `MAXLEN ~100000` per design doc decision
+</instructions>
 
-- [ ] `go test ./internal/notification/event/...` passes
-- [ ] `go test ./internal/handler/...` passes
-- [ ] Event struct matches schema in design doc
-- [ ] Publisher uses XADD with MAXLEN as specified
-- [ ] `go vet ./...` reports no issues
+## Done When
 
+```bash
+go test ./internal/notification/event/...
+go test ./internal/handler/...
+go vet ./...
+```
+
+## Safety & Fallback
+
+- If `internal/handler/order.go` doesn't exist, search for the order handler location with Grep
+- If Redis client injection pattern is unclear, check existing handler patterns in the codebase
+- If verification fails, fix and re-run — do not skip
+```
+
+### task-4-push-delivery.md
+
+```markdown
+---
+description: Implement FCM and APNs push notification delivery senders
+allowed-tools: Bash, Read, Write, Edit, Glob, Grep
 ---
 
-## Task 4: Add push notification delivery (FCM/APNs)
+# Task 4: Add push notification delivery (FCM/APNs)
 
-- **Status**: pending
-- **Depends on**: Task 2
+<background_information>
+- **PRD**: skills/prd-notifications/SKILL.md
+- **Design**: specs/design-notifications.md
+- **Depends on**: Task 2 (sender interface — task-2-sender-interface)
 - **Spec refs**: FR-2, FR-5
-- **Scope**: `internal/notification/sender/fcm.go`, `internal/notification/sender/apns.go`
-- **Verify**: `go test ./internal/notification/sender/...`
+</background_information>
 
-### What to do
+<instructions>
+## Pre-check
+
+Before starting, verify dependencies are complete:
+1. Check that `internal/notification/sender/sender.go` exists (from Task 2)
+2. If missing, report: "Task 2 must be completed first. Run /notifications/task-2-sender-interface"
+
+## Core Task
+
+Implement FCM and APNs delivery using the Sender interface from Task 2.
+Handle expired device tokens per FR-5.
+
+## Scope
+
+Files to create:
+- `internal/notification/sender/fcm.go`
+- `internal/notification/sender/apns.go`
+- `internal/notification/sender/multi.go`
+
+Do NOT modify files outside this scope.
+
+## Steps
 
 1. Implement FCM delivery in `sender/fcm.go`:
    - Use firebase-admin-go SDK (per design doc Decision Summary)
@@ -96,85 +246,19 @@ last-updated: 2026-03-05
 3. Create `sender/multi.go`:
    - Route to FCM or APNs based on device token platform field
    - Query device tokens from `DeviceTokenRepository`
+</instructions>
 
-### Done when
+## Done When
 
-- [ ] `go test ./internal/notification/sender/...` passes
-- [ ] FCM sender handles expired tokens correctly
-- [ ] APNs sender handles expired tokens correctly
-- [ ] Multi-sender routes to correct provider by platform
+```bash
+go test ./internal/notification/sender/...
+go vet ./...
+```
 
----
+## Safety & Fallback
 
-## Task 5: Implement notification consumer
-
-- **Status**: pending
-- **Depends on**: Task 3, Task 4
-- **Spec refs**: FR-1, FR-4, NFR-2
-- **Scope**: `internal/notification/consumer/`
-- **Verify**: `go test ./internal/notification/consumer/...`
-
-### What to do
-
-1. Create consumer in `consumer/consumer.go`:
-   - Use XREADGROUP for Redis Stream consumption
-   - Consumer group: "notification-workers" (per design doc)
-   - Process events through sender (from Task 4)
-
-2. Add user preference checking:
-   - Check notification preferences before sending (FR-4)
-   - Skip silently if user disabled notifications
-   - Log skipped events for audit
-
-3. Add retry with exponential backoff:
-   - Max 3 retries per design doc Decision Summary
-   - Move to dead letter after max retries (if decided, see open question)
-
-4. Wire consumer startup in `cmd/server/main.go`:
-   - Start as background goroutine
-   - Graceful shutdown via context cancellation
-
-### Done when
-
-- [ ] `go test ./internal/notification/consumer/...` passes
-- [ ] Consumer reads from Redis Stream correctly
-- [ ] User preferences are checked before sending
-- [ ] Retry logic works with exponential backoff
-- [ ] Consumer starts and stops gracefully with server
-
----
-
-## Task 6: Integration tests and error handling
-
-- **Status**: pending
-- **Depends on**: Task 5
-- **Spec refs**: FR-1 through FR-5, NFR-1, NFR-2
-- **Scope**: `internal/notification/integration_test.go`, error handling across all notification packages
-- **Verify**: `go test ./internal/notification/... -tags=integration`
-
-### What to do
-
-1. Create integration test in `internal/notification/integration_test.go`:
-   - End-to-end: status change -> event -> consumer -> mock sender
-   - Verify delivery within expected latency (FR-1, NFR-1)
-   - Test user preference opt-out flow (FR-4)
-   - Test expired token handling (FR-5)
-
-2. Review error handling across all notification packages:
-   - Ensure all errors are wrapped with context
-   - Ensure structured logging for failures (slog)
-   - Verify no panics on nil/empty inputs
-
-3. Add metrics instrumentation:
-   - notification_sent_total (counter, labels: platform, status)
-   - notification_latency_seconds (histogram)
-
-### Done when
-
-- [ ] `go test ./internal/notification/... -tags=integration` passes
-- [ ] All error paths produce structured log output
-- [ ] Metrics are emitted for sent/failed notifications
-- [ ] No `go vet` or linter warnings
+- If go module dependencies need adding, run `go get` for firebase-admin-go and apns2
+- If the Sender interface has changed since Task 2, read the current version first
 ```
 
 ## Anti-Patterns
@@ -182,25 +266,24 @@ last-updated: 2026-03-05
 ### Anti-Pattern 1: Tasks Too Large
 
 ```markdown
-<!-- BAD: This is 3+ tasks bundled into one -->
-## Task 1: Implement the notification system
+<!-- BAD: This is 3+ tasks bundled into one command -->
+---
+description: Implement the notification system
+---
+# Task 1: Implement everything
 
-- **Scope**: `internal/notification/`
-
-### What to do
-
+## Steps
 Create the data model, implement the sender interface,
-wire up events, add FCM and APNs support, create the
-consumer, and write tests.
+wire up events, add FCM and APNs support...
 ```
 
-**Fix:** Split into 6 focused tasks as shown in the example above.
+**Fix:** Split into 6 focused task commands as shown above.
 
 ### Anti-Pattern 2: Repeating Design Doc Content
 
 ```markdown
 <!-- BAD: Repeating interface definition from design doc -->
-### What to do
+## Steps
 
 Implement the following interface:
 ```go
@@ -208,43 +291,39 @@ type Sender interface {
     Send(ctx context.Context, userID string, n Notification) error
     SendBatch(ctx context.Context, reqs []SendRequest) []Result
 }
-// ... 20 more lines of type definitions
 ```
 
 <!-- GOOD: Reference the design doc -->
-### What to do
+## Steps
 
 Implement the `Sender` interface defined in
 specs/design-notifications.md (Interface Contracts section).
 ```
 
-### Anti-Pattern 3: No Verification Commands
+### Anti-Pattern 3: No Pre-check for Dependencies
+
+```markdown
+<!-- BAD: No dependency verification -->
+## Steps
+1. Import the model types from Task 1...
+
+<!-- GOOD: Explicit pre-check -->
+## Pre-check
+1. Check that `internal/notification/model.go` exists (from Task 1)
+2. If missing, report: "Task 1 must be completed first."
+```
+
+### Anti-Pattern 4: No Verification Commands
 
 ```markdown
 <!-- BAD: No way to verify completion -->
-### Done when
-
-- [ ] The code works correctly
-- [ ] Tests pass
+## Done When
+- The code works correctly
 
 <!-- GOOD: Specific, executable -->
-### Done when
-
-- [ ] `go test ./internal/notification/sender/...` passes
-- [ ] `go vet ./...` reports no issues
+## Done When
+```bash
+go test ./internal/notification/sender/...
+go vet ./...
 ```
-
-### Anti-Pattern 4: Missing Dependencies
-
-```markdown
-<!-- BAD: No dependency info, agent may start in wrong order -->
-## Task 4: Add push delivery
-
-- **Status**: pending
-
-<!-- GOOD: Explicit dependencies -->
-## Task 4: Add push delivery
-
-- **Status**: pending
-- **Depends on**: Task 2
 ```

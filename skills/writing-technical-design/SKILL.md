@@ -40,7 +40,7 @@ L4      Deep reference              specs/design-{feature}.md (lower sections)
 ---
 title: "Feature Name - Technical Design"
 status: draft | review | approved | implementing | done
-prd: prd-feature-name.md
+prd: skills/prd-feature-name/SKILL.md
 last-updated: YYYY-MM-DD
 ---
 
@@ -272,7 +272,7 @@ This ensures agents working on specific code areas automatically get relevant ar
 ## Lifecycle
 
 ```
-1. Start from approved feature spec (link in frontmatter prd field)
+1. Start from approved feature spec (PRD Agent Skill: skills/prd-{feature}/SKILL.md)
 2. Write TL;DR with architecture approach
 3. Fill decision summary table
 4. Draw component diagram (ASCII)
@@ -282,7 +282,7 @@ This ensures agents working on specific code areas automatically get relevant ar
 8. Add L1 reference to constitution
 9. Review -> set status: "approved"
 10. Extract component rules to L2 files
-11. Create implementation tasks (writing-implementation-tasks skill)
+11. Create implementation task commands (writing-implementation-tasks skill)
 12. During implementation -> set status: "implementing"
 13. After completion -> set status: "done"
 ```
@@ -291,7 +291,7 @@ This ensures agents working on specific code areas automatically get relevant ar
 
 ```
 Technical Design Quality Check:
-- [ ] Links to feature spec in frontmatter (prd field)
+- [ ] Links to feature spec PRD skill in frontmatter (prd field)
 - [ ] TL;DR states architecture approach and key trade-off
 - [ ] Decision summary has concrete choices with rationale
 - [ ] Every component has location, responsibility, interface

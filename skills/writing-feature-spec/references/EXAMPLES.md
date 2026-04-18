@@ -1,17 +1,26 @@
-# Feature Spec Examples
+# Feature Spec Examples (Agent Skill Format)
 
 ## Example: Push Notification System
 
+### Directory Structure
+
+```
+skills/prd-notifications/
+├── SKILL.md
+└── references/
+    ├── BACKGROUND.md
+    └── RULES.md
+```
+
+### SKILL.md
+
 ```markdown
 ---
-title: Push Notifications for Order Status
-status: approved
-priority: high
-depends-on: []
-last-updated: 2026-03-01
+name: prd-notifications
+description: PRD for push notifications on order status changes (placed, shipped, delivered) via FCM and APNs. Use when implementing notification handlers, order status events, device token management, or reviewing notification-related code.
 ---
 
-# Push Notifications for Order Status
+# Push Notifications for Order Status - PRD
 
 ## TL;DR
 
@@ -91,7 +100,7 @@ checking order status. Uses FCM for Android and APNs for iOS.
 
 ## Non-Goals
 
-- Email notification channel (planned: specs/prd-email-notifications.md)
+- Email notification channel (planned: skills/prd-email-notifications/)
 - SMS notification channel
 - Rich notifications (images, action buttons)
 - Notification preferences UI (Phase 2)
@@ -107,8 +116,16 @@ checking order status. Uses FCM for Android and APNs for iOS.
 - [x] Where to store device tokens? -> Decision: New device_tokens
   table, see design doc.
 
----
-<!-- Below this line = L4 (deep reference, loaded only when needed) -->
+## Deep Reference
+
+**Background & research**: See [BACKGROUND.md](references/BACKGROUND.md)
+**Code-area constraints**: See [RULES.md](references/RULES.md)
+```
+
+### references/BACKGROUND.md
+
+```markdown
+# Push Notifications - Background & Research
 
 ## Background
 
@@ -121,6 +138,14 @@ Competitor analysis: All top-5 competitors offer push notifications
 for order status. Our NPS feedback specifically mentions lack of
 proactive order updates as a pain point.
 
+## Research
+
+Push notification delivery benchmarks (industry):
+- FCM typical latency: 200-500ms
+- APNs typical latency: 100-300ms
+- Combined with our event processing: ~2s estimated end-to-end
+- 5s SLA provides comfortable margin
+
 ## Edge Cases
 
 | Case | Expected Behavior | Requirement |
@@ -132,14 +157,39 @@ proactive order updates as a pain point.
 | User deletes account mid-delivery | Cancel pending, clean up tokens | FR-4 |
 | FCM rate limit hit | Retry with exponential backoff, max 3 | NFR-2 |
 | APNs certificate expiry | Alert ops, graceful degradation | NFR-1 |
+```
 
-## Research
+### references/RULES.md
 
-Push notification delivery benchmarks (industry):
-- FCM typical latency: 200-500ms
-- APNs typical latency: 100-300ms
-- Combined with our event processing: ~2s estimated end-to-end
-- 5s SLA provides comfortable margin
+```markdown
+# Push Notifications - Code-Area Constraints
+
+These constraints should be extracted to L2 path-conditional rules
+after the spec is approved.
+
+## Constraints
+
+- All notifications must go through the NotificationSender interface
+- Never send notifications synchronously in HTTP handlers
+- Log all notification failures with structured error context
+- Respect user notification preferences before sending
+- API response time budget: existing baseline + max 10ms
+
+## L2 Extraction Target
+
+Extract to `.claude/rules/notification-code.md`:
+
+    ---
+    paths:
+      - "internal/notification/**/*.go"
+      - "internal/handler/order*.go"
+    ---
+
+    Notification constraints (from skills/prd-notifications/SKILL.md):
+    - Async delivery only; never block HTTP handlers
+    - Use NotificationSender interface
+    - All failures must be logged with structured context
+    - Respect user notification preferences before sending
 ```
 
 ## Anti-Patterns
@@ -156,16 +206,14 @@ Push notification delivery benchmarks (industry):
   without blocking the HTTP request that triggers the status change.
 ```
 
-### Anti-Pattern 2: Vague Acceptance Criteria
+### Anti-Pattern 2: Vague Description
 
 ```markdown
-<!-- BAD: Untestable -->
-- **FR-1**: Send notifications quickly
-  - Acceptance: Notifications should be fast
+<!-- BAD: Claude can't determine when to activate this skill -->
+description: PRD for notification improvements.
 
-<!-- GOOD: Testable with specific threshold -->
-- **FR-1**: The system SHALL send a push notification within 5 seconds
-  - Acceptance: Measured over 100 consecutive events on test device
+<!-- GOOD: Specific keywords enable auto-discovery -->
+description: PRD for push notifications on order status changes (FCM/APNs). Use when implementing notification handlers, order status events, or device token management.
 ```
 
 ### Anti-Pattern 3: Missing Non-Goals
@@ -175,7 +223,7 @@ Push notification delivery benchmarks (industry):
 
 <!-- GOOD: Explicit exclusions prevent scope creep -->
 ## Non-Goals
-- Email notification channel (planned: specs/prd-email-notifications.md)
+- Email notification channel (planned: skills/prd-email-notifications/)
 - SMS notification channel
 - Rich notifications (images, action buttons)
 ```

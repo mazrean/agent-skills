@@ -1,168 +1,177 @@
 ---
 name: writing-implementation-tasks
-description: Creates agent-optimized implementation task breakdowns with dependency ordering and atomic scope. Use when breaking down features into tasks, planning implementation order, defining task dependencies, or when user mentions task breakdown, implementation plan, or work decomposition for spec-driven development.
+description: Creates implementation tasks as Claude Code custom slash commands with dependency ordering and atomic scope. Use when breaking down features into executable task commands, planning implementation order, defining task dependencies, or when user mentions task breakdown, implementation plan, or work decomposition for spec-driven development.
 ---
 
-# Writing Implementation Tasks
+# Writing Implementation Tasks as Commands
 
-Create task breakdowns that guide coding agents through implementation in the correct order. Each task is scoped for a single atomic commit with clear inputs, outputs, and verification.
+Create implementation task breakdowns as Claude Code custom slash commands. Each task becomes an invokable `/command` that guides the agent through a single atomic implementation step.
 
 **Use this skill when** breaking a feature spec and technical design into implementable tasks, planning implementation order, or defining what to build next.
 
 **Supporting files:** [CONTEXT-LAYERS.md](references/CONTEXT-LAYERS.md) for layer mapping details, [EXAMPLES.md](references/EXAMPLES.md) for complete examples.
 
-## Context Layer Distribution
+## Why Commands?
 
-Task information spans context layers differently from other spec documents:
+Implementation tasks as Claude Code commands provide:
+- **On-demand execution**: User runs `/task-1-data-model` to start a specific task
+- **Self-contained context**: Each command has all info needed for that task
+- **Clear workflow**: Progress tracked via a overview command
+- **No wasted tokens**: Only the current task is loaded, not the full task list
+
+## Output Structure
 
 ```
-Layer   What goes here              File location
-======================================================================
-L1      Current task status         CLAUDE.md / AGENTS.md (constitution)
-        "Current: Task 3 of specs/tasks-notifications.md"
-
-L2      (Not typically used for tasks)
-
-L3      Task list (this doc)        specs/tasks-{feature}.md
-        Ordered tasks with scope, deps, verification
-
-L4      Task details                specs/tasks-{feature}.md (per-task)
-        Detailed implementation notes, edge cases
-======================================================================
-
-Key difference: L1 tracks CURRENT POSITION, not the full task list.
-The agent loads L3 only to pick the next task or check dependencies.
+.claude/commands/{feature-name}/
+├── overview.md                     # Progress tracker, run with /{feature-name}/overview
+├── task-1-{short-name}.md          # Task 1 command
+├── task-2-{short-name}.md          # Task 2 command
+├── task-3-{short-name}.md          # Task 3 command
+└── ...
 ```
 
-## Template: `specs/tasks-{feature-name}.md`
+## Template: Overview Command
+
+`.claude/commands/{feature-name}/overview.md`
 
 ```markdown
 ---
-title: "Feature Name - Implementation Tasks"
-status: in-progress | blocked | done
-prd: prd-feature-name.md
-design: design-feature-name.md
-last-updated: YYYY-MM-DD
+description: Show progress and next steps for {Feature Name} implementation
+allowed-tools: Read, Glob, Grep
 ---
 
-# Feature Name - Implementation Tasks
+# {Feature Name} - Implementation Overview
+
+<background_information>
+- **PRD**: skills/prd-{feature-name}/SKILL.md
+- **Design**: specs/design-{feature-name}.md (if exists)
+- **Mission**: Track implementation progress and guide to next task
+</background_information>
+
+<instructions>
+## Execution Steps
+
+1. Check the status of each task file in `.claude/commands/{feature-name}/`
+2. For each task, check if the "Done when" verification commands pass
+3. Report progress summary and recommend the next task to run
 
 ## Progress
 
-- [x] Task 1: [title]
-- [x] Task 2: [title]
-- [ ] Task 3: [title]  <-- current
-- [ ] Task 4: [title]
-- [ ] Task 5: [title]
+- [ ] Task 1: {title} → `/{feature-name}/task-1-{short-name}`
+- [ ] Task 2: {title} → `/{feature-name}/task-2-{short-name}`
+- [ ] Task 3: {title} → `/{feature-name}/task-3-{short-name}`
+- [ ] Task 4: {title} → `/{feature-name}/task-4-{short-name}`
 
-## Task 1: [Title]
+## Dependency Order
 
-- **Status**: done
-- **Depends on**: none
-- **Spec refs**: FR-1
-- **Scope**: [What files/components to create or modify]
-- **Verify**: [Command to run or condition to check]
+```
+Task 1 (no deps)
+  └─► Task 2 (depends: Task 1)
+       └─► Task 3 (depends: Task 2)
+            └─► Task 4 (depends: Task 2, Task 3)
+```
+</instructions>
 
-### What to do
+## Output Description
+Report: which tasks are done, which is next, and the command to run it.
+```
 
-[Concise implementation instructions. 3-10 lines.
-Reference interface contracts from design doc, not repeat them.]
+## Template: Task Command
 
-### Done when
+`.claude/commands/{feature-name}/task-{N}-{short-name}.md`
 
-- [ ] [Concrete verification 1: e.g., "tests pass: go test ./internal/notification/..."]
-- [ ] [Concrete verification 2: e.g., "endpoint returns 200 with valid payload"]
-
+```markdown
+---
+description: {Task title} for {Feature Name}
+allowed-tools: Bash, Read, Write, Edit, Glob, Grep
 ---
 
-## Task 2: [Title]
+# Task {N}: {Title}
 
-- **Status**: done
-- **Depends on**: Task 1
-- **Spec refs**: FR-2
-- **Scope**: `internal/notification/sender/`
-- **Verify**: `go test ./internal/notification/sender/...`
+<background_information>
+- **PRD**: skills/prd-{feature-name}/SKILL.md
+- **Design**: specs/design-{feature-name}.md
+- **Depends on**: {Task M title} (task-{M}-{short-name})
+- **Spec refs**: {FR-1, FR-2, ...}
+</background_information>
 
-### What to do
+<instructions>
+## Core Task
 
-[Instructions]
+{Concise implementation instructions. 3-10 lines.
+Reference interface contracts from design doc, not repeat them.}
 
-### Done when
+## Scope
 
-- [ ] [Verification]
+Files to create or modify:
+- `{path/to/file1}`
+- `{path/to/file2}`
 
----
+Do NOT modify files outside this scope.
 
-## Task 3: [Title]
+## Steps
 
-- **Status**: in-progress
-- **Depends on**: Task 1, Task 2
-- **Spec refs**: FR-3, FR-4
-- **Scope**: `internal/handler/notification.go`, `internal/notification/service.go`
-- **Verify**: `go test ./internal/handler/... ./internal/notification/...`
+1. {Step 1}
+2. {Step 2}
+3. {Step 3}
+</instructions>
 
-### What to do
+## Done When
 
-[Instructions]
+Run these verification commands. ALL must pass before this task is complete:
 
-### Done when
+```bash
+{verification command 1}
+{verification command 2}
+```
 
-- [ ] [Verification]
+## Safety & Fallback
+
+- If verification fails, fix and re-run — do not skip
+- If blocked by a dependency, report which task must be completed first
+- Do not modify files outside the defined scope
 ```
 
 ## Writing Guidelines
 
-### Progress Section: The Agent's Navigation
-
-The Progress section at the top serves as a quick-scan index. Agents read this first to:
-1. Find the current task
-2. Understand overall completion state
-3. Decide whether to load task details
-
-```markdown
-## Progress
-
-- [x] Task 1: Define notification data model and migrations
-- [x] Task 2: Implement NotificationSender interface
-- [ ] Task 3: Wire up order status change events  <-- current
-- [ ] Task 4: Add push notification delivery (FCM/APNs)
-- [ ] Task 5: Integration tests and error handling
-```
-
-The `<-- current` marker tells the agent exactly where to focus.
-
 ### Task Scope: Atomic and Committable
 
-Each task must be completable in a single atomic commit. The scope definition prevents agents from touching unrelated code:
+Each task command must be completable in a single atomic commit:
 
 ```markdown
-<!-- BAD: Too broad, agent will over-engineer -->
-- **Scope**: Implement the notification system
+<!-- BAD: Too broad -->
+## Core Task
+Implement the notification system
 
 <!-- GOOD: Specific files, clear boundary -->
-- **Scope**: Create `internal/notification/model.go` (types) and
-  `migrations/005_notifications.sql` (DDL from design doc)
+## Core Task
+Create `internal/notification/model.go` (types) and
+`migrations/005_notifications.sql` (DDL from design doc)
+
+## Scope
+- `internal/notification/model.go`
+- `migrations/005_notifications.sql`
 ```
 
 ### Task Ordering: Dependency-Driven
 
-Order tasks so each builds on the previous. The dependency chain should follow a bottom-up pattern:
+Order tasks so each builds on the previous. Follow bottom-up pattern:
 
 ```
-1. Data model / types       (no dependencies)
-2. Repository / storage     (depends on: types)
-3. Business logic / service (depends on: repository)
-4. API handlers / transport (depends on: service)
-5. Integration / wiring     (depends on: all above)
-6. Tests / verification     (depends on: wiring)
+task-1-data-model       (no dependencies)
+task-2-repository       (depends: task-1)
+task-3-service          (depends: task-2)
+task-4-handler          (depends: task-3)
+task-5-integration      (depends: all above)
+task-6-tests            (depends: task-5)
 ```
 
 ### Spec References: Link, Don't Repeat
 
-Tasks reference requirement IDs and design components, not repeat their content:
+Tasks reference requirement IDs and design components:
 
 ```markdown
-### What to do
+## Core Task
 
 Implement the NotificationSender interface defined in
 specs/design-notifications.md (Component: Notification Sender).
@@ -170,35 +179,31 @@ Follow the interface contract exactly. Use FCM SDK for Android
 delivery per Decision Summary.
 ```
 
-The agent loads the referenced design doc section only if needed for implementation details.
-
 ### Verification: Executable Checks
 
-Every task's "Done when" must be verifiable by running a command:
+Every task's "Done When" must be runnable commands:
 
 ```markdown
-### Done when
+## Done When
 
-- [ ] `go test ./internal/notification/model/...` passes
-- [ ] `sqlc generate` succeeds without errors
-- [ ] `go vet ./...` reports no issues
+```bash
+go test ./internal/notification/model/...
+sqlc generate
+go vet ./...
+```
 ```
 
-Agents run these commands after implementation to self-verify.
+### Command Description: Clear and Actionable
 
-## L1 Integration: Current Task Tracking
+The `description` field in frontmatter drives command discovery:
 
-Keep the constitution updated with current task position:
+```yaml
+# BAD: vague
+description: Do task 1
 
-```markdown
-<!-- In CLAUDE.md / AGENTS.md -->
-## Current Work
-
-Working on: specs/tasks-notifications.md, Task 3
-Next: Task 4 (push delivery via FCM/APNs)
+# GOOD: specific
+description: Create notification data model and database migrations for push notifications
 ```
-
-This costs ~30 tokens but gives the agent immediate context on session start. Update this as tasks complete.
 
 ## Task Granularity Guide
 
@@ -209,7 +214,7 @@ This costs ~30 tokens but gives the agent immediate context on session start. Up
 | Too large | > 200 LOC | Split into sub-tasks |
 
 Signs a task is too large:
-- "What to do" exceeds 15 lines
+- Instructions exceed 15 lines
 - Scope spans 3+ unrelated directories
 - Multiple independent verification steps
 
@@ -220,48 +225,48 @@ Signs a task is too small:
 
 ## Handling Blocked Tasks
 
-When a task is blocked, mark it and note the blocker:
+When a task depends on incomplete work, the command should detect and report it:
 
 ```markdown
-## Task 4: Add push notification delivery
+<instructions>
+## Pre-check
 
-- **Status**: blocked
-- **Blocked by**: Waiting for FCM credentials from DevOps (@alice)
-- **Depends on**: Task 2
+Before starting, verify dependencies are complete:
+1. Check that `internal/notification/model.go` exists (from Task 1)
+2. If missing, report: "Task 1 must be completed first. Run /{feature}/task-1-data-model"
+</instructions>
 ```
-
-The agent skips blocked tasks and moves to the next unblocked one.
 
 ## Lifecycle
 
 ```
-1. Start from approved feature spec + technical design
+1. Start from approved feature spec (Agent Skill) + technical design
 2. Identify implementation units from components in design doc
 3. Order tasks by dependency (bottom-up)
-4. Write each task with scope, verification, and done-when
-5. Set first task as current in constitution (L1)
-6. Agent implements Task 1, marks done, updates L1 to Task 2
-7. Repeat until all tasks done
-8. Set task doc status: "done"
-9. Update feature spec status: "done"
-10. Remove L1 current-work reference (save tokens)
+4. Create .claude/commands/{feature}/ directory
+5. Write overview.md with progress checklist
+6. Write each task-{N}-{short-name}.md with scope, steps, verification
+7. User runs /{feature}/overview to see status
+8. User runs /{feature}/task-{N}-{short-name} to implement each task
+9. After all tasks done, optionally archive or remove command directory
 ```
 
 ## Quality Checklist
 
 ```
-Implementation Tasks Quality Check:
-- [ ] Links to both feature spec and technical design in frontmatter
-- [ ] Progress section at top with checkbox list
-- [ ] Current task marked with <-- current
+Implementation Tasks (Commands) Quality Check:
+- [ ] Directory: .claude/commands/{feature-name}/
+- [ ] overview.md exists with progress checklist and dependency graph
+- [ ] Each task is a separate command file: task-{N}-{short-name}.md
+- [ ] Each command has frontmatter: description, allowed-tools
 - [ ] Tasks ordered by dependency (bottom-up)
-- [ ] Each task has: status, depends-on, spec-refs, scope, verify
+- [ ] Each task has: background_information, instructions, done-when
 - [ ] Each task is atomic (single commit, 20-200 LOC)
-- [ ] "What to do" references spec/design, doesn't repeat them
-- [ ] "Done when" has executable verification commands
+- [ ] Instructions reference spec/design, don't repeat them
+- [ ] "Done When" has executable verification commands
 - [ ] No task spans 3+ unrelated directories
-- [ ] Current task tracked in constitution (L1)
-- [ ] File named: specs/tasks-{feature-name}.md
+- [ ] Scope section explicitly lists files to create/modify
+- [ ] Pre-check verifies dependencies before starting
 ```
 
 ## Detailed Guides

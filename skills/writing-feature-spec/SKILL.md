@@ -1,57 +1,47 @@
 ---
 name: writing-feature-spec
-description: Creates agent-optimized feature specifications (PRD) with context-layer-aware progressive disclosure. Use when writing product requirements, feature specs, user stories, acceptance criteria, or when starting spec-driven development for a new feature.
+description: Creates feature specifications (PRD) as Agent Skills with progressive disclosure. Use when writing product requirements, feature specs, user stories, acceptance criteria, or when starting spec-driven development for a new feature. The PRD is output as a skill directory with SKILL.md and reference files.
 ---
 
-# Writing Feature Specs
+# Writing Feature Specs as Agent Skills
 
-Create feature specifications structured for coding agent context management. Information is distributed across context layers so agents load only what they need.
+Create feature specifications structured as Agent Skills. The PRD becomes a skill that Claude can discover and activate, giving it contextual knowledge about the feature automatically.
 
 **Use this skill when** defining what to build and why, writing product requirements, user stories, or acceptance criteria.
 
 **Supporting files:** [CONTEXT-LAYERS.md](references/CONTEXT-LAYERS.md) for layer mapping details, [EXAMPLES.md](references/EXAMPLES.md) for complete examples.
 
-## Context Layer Distribution
+## Why Agent Skill?
 
-A feature spec's information spans multiple context layers:
+A PRD as an Agent Skill provides:
+- **Auto-discovery**: Claude finds the spec via skill metadata without searching
+- **Progressive disclosure**: SKILL.md body = core spec (L3), reference files = deep context (L4)
+- **Token efficiency**: Only loaded when the feature is relevant to the conversation
+
+## Output Structure
 
 ```
-Layer   What goes here              File location
-======================================================================
-L1      One-line feature reference  CLAUDE.md / AGENTS.md (constitution)
-        "specs/prd-notifications.md - Push notification system"
-
-L2      Code-area constraints       .claude/rules/ or .github/instructions/
-        "Notification handlers must use async sender interface"
-
-L3      Spec body (this doc)        specs/prd-{feature}.md
-        Requirements, user stories, acceptance criteria
-
-L4      Deep reference              specs/prd-{feature}.md (lower sections)
-        Background, research, alternatives, edge case catalog
-======================================================================
-
-Loading cost:  L1 = every request    L2 = path match
-               L3 = on demand       L4 = explicit read
+skills/prd-{feature-name}/
+├── SKILL.md              # Core spec: TL;DR, requirements, user stories, constraints
+└── references/
+    ├── BACKGROUND.md     # Deep reference: background, research, edge cases (L4)
+    └── RULES.md          # Code-area constraints to extract to L2
 ```
 
-## Template: `specs/prd-{feature-name}.md`
+## Template: `skills/prd-{feature-name}/SKILL.md`
 
 ```markdown
 ---
-title: Feature Name
-status: draft | review | approved | implementing | done
-priority: high | medium | low
-depends-on: []
-last-updated: YYYY-MM-DD
+name: prd-{feature-name}
+description: PRD for {Feature Name}. {1-sentence summary of capability and who benefits}. Use when implementing, testing, or reviewing code related to {feature area}.
 ---
 
-# Feature Name
+# {Feature Name} - PRD
 
 ## TL;DR
 
-[1-3 sentences. Agent reads this to decide whether to load more.
-Must answer: What capability? Who benefits? Why now?]
+[1-3 sentences. Must answer: What capability? Who benefits? Why now?
+This is the most critical section — Claude reads this to decide relevance.]
 
 ## Requirements
 
@@ -88,18 +78,25 @@ Must answer: What capability? Who benefits? Why now?]
 - [ ] [Unresolved question] (@owner)
 - [x] [Resolved question] -> Decision: [answer]
 
----
-<!-- Below this line = L4 (deep reference, loaded only when needed) -->
+## Deep Reference
+
+**Background & research**: See [BACKGROUND.md](references/BACKGROUND.md)
+**Code-area constraints**: See [RULES.md](references/RULES.md)
+```
+
+## Template: `references/BACKGROUND.md`
+
+```markdown
+# {Feature Name} - Background & Research
 
 ## Background
 
-[Why this feature exists. Only read when requirements alone
-are insufficient to understand intent. Keep under 300 words.]
+[Why this feature exists. Keep under 300 words.]
 
 ## Research
 
 [User research, data analysis, competitive analysis that
-informed requirements. Agent rarely needs this.]
+informed requirements.]
 
 ## Edge Cases
 
@@ -109,26 +106,49 @@ informed requirements. Agent rarely needs this.]
 | [Edge case 2] | [Behavior] | FR-2 |
 ```
 
+## Template: `references/RULES.md`
+
+```markdown
+# {Feature Name} - Code-Area Constraints
+
+These constraints should be extracted to L2 path-conditional rules
+after the spec is approved.
+
+## Constraints
+
+- [Constraint derived from requirements]
+- [Another constraint]
+
+## L2 Extraction Target
+
+Extract to `.claude/rules/{feature-name}.md` with appropriate path globs:
+
+    ---
+    paths:
+      - "path/to/relevant/code/**/*.ext"
+    ---
+
+    {Feature} constraints (from skills/prd-{feature}/SKILL.md):
+    - [constraint 1]
+    - [constraint 2]
+```
+
 ## Writing Guidelines
 
-### TL;DR: The 100-Token Gate
+### TL;DR: The Gate for Skill Activation
 
-The TL;DR is the most important section. It determines whether the agent loads the rest of the document. It must be:
+The TL;DR combined with the skill `description` determines whether Claude loads this spec. Both must be:
 
 - **Self-contained**: Understandable without reading anything else
-- **Decision-enabling**: Agent can determine relevance from this alone
+- **Decision-enabling**: Claude can determine relevance from description alone
 - **Concrete**: Specific capability, not vague aspiration
 
 ```markdown
-<!-- BAD: Vague, doesn't help agent decide relevance -->
-## TL;DR
-This document describes improvements to the notification system.
+<!-- BAD description: Too vague -->
+description: PRD for notification improvements.
 
-<!-- GOOD: Specific capability, clear scope, concrete benefit -->
-## TL;DR
-Real-time push notifications for order status changes (placed,
-shipped, delivered). Reduces support ticket volume from users
-manually checking order status. FCM for Android, APNs for iOS.
+<!-- GOOD description: Specific, includes trigger keywords -->
+description: PRD for push notifications on order status changes (FCM/APNs). Use when implementing notification handlers, order status events, or device token management.
 ```
 
 ### Requirements: Atomic and Testable
@@ -151,7 +171,7 @@ Each requirement is a unit of implementation. Agents use requirements to:
 
 ### User Stories: Given-When-Then for Test Derivation
 
-Agents directly convert Given-When-Then into test cases. Write them as executable specifications:
+Agents directly convert Given-When-Then into test cases:
 
 ```markdown
 - As a customer, I want to receive push notifications when my order ships
@@ -167,50 +187,38 @@ Agents directly convert Given-When-Then into test cases. Write them as executabl
 
 ### Non-Goals: Preventing Agent Scope Creep
 
-Agents will try to "improve" or "complete" features beyond scope. Non-goals are guardrails:
-
 ```markdown
 ## Non-Goals
 
-- Email notification fallback (planned: specs/prd-email-notifications.md)
+- Email notification fallback (planned: skills/prd-email-notifications/)
 - Notification preferences UI (Phase 2, not yet specced)
 - Rich media notifications (images, action buttons)
-- SMS delivery channel
 ```
 
-### The L4 Separator
+## Layer Mapping (Skill Edition)
 
-Use a horizontal rule (`---`) and HTML comment to signal the boundary between L3 (core spec) and L4 (deep reference):
+```
+Layer   What goes here                  Location
+======================================================================
+L1      Skill metadata (auto)           SKILL.md frontmatter
+        Claude discovers via description, no manual constitution entry needed
 
-```markdown
-## Open Questions
-...
+L2      Code-area constraints           .claude/rules/{feature}.md
+        Extract from references/RULES.md after approval
 
----
-<!-- Below this line = L4 (deep reference, loaded only when needed) -->
+L3      Core spec (auto-loaded)         SKILL.md body
+        Requirements, user stories, constraints, non-goals
 
-## Background
-...
+L4      Deep reference (on demand)      references/BACKGROUND.md
+        Background, research, edge cases
+======================================================================
 ```
 
-This is a convention for agents: everything above the separator is the actionable spec; everything below is supporting context loaded only when the agent needs clarification.
-
-## L1 Integration: Constitution Reference
-
-After creating the spec, add a one-line reference to the project constitution:
-
-```markdown
-<!-- In CLAUDE.md or AGENTS.md, under "Active Specs" -->
-## Active Specs
-
-- `specs/prd-notifications.md` - Push notifications for order status
-```
-
-This costs ~20 tokens per feature but lets the agent discover relevant specs without searching.
+**Key advantage over plain files**: L1 is automatic. No need to manually add references to CLAUDE.md — the skill system handles discovery.
 
 ## L2 Integration: Path-Conditional Rules
 
-Extract code-area constraints from the spec into conditional rules:
+After spec approval, extract code-area constraints from `references/RULES.md` into `.claude/rules/`:
 
 ```markdown
 <!-- .claude/rules/notification-handlers.md -->
@@ -219,46 +227,41 @@ paths:
   - "internal/notification/**/*.go"
 ---
 
-Notification handler rules (from specs/prd-notifications.md):
+Notification handler rules (from skills/prd-notifications/SKILL.md):
 - All notifications must go through the NotificationSender interface
 - Never send notifications synchronously in HTTP handlers
 - Log all notification failures with structured error context
 ```
 
-This way, when the agent edits notification code, it automatically gets the relevant constraints without loading the full spec.
-
 ## Lifecycle
 
 ```
-1. Create specs/prd-{feature}.md with template
-2. Write TL;DR first (forces clarity)
-3. Add requirements with acceptance criteria
-4. Add user stories in Given-When-Then
-5. Define constraints and non-goals
-6. Set status: "draft"
-7. Add one-line reference to constitution (L1)
-8. Review -> set status: "approved"
-9. Create technical design (writing-technical-design skill)
-10. Extract code-area rules to L2 files
-11. During implementation -> set status: "implementing"
-12. After completion -> set status: "done"
-13. Remove L1 reference from constitution (save tokens)
+1. Create skills/prd-{feature}/ directory with references/ subdirectory
+2. Write SKILL.md with template (TL;DR first)
+3. Write references/BACKGROUND.md for deep context
+4. Write references/RULES.md for code-area constraints
+5. Review -> refine description for discoverability
+6. Create technical design (writing-technical-design skill)
+7. Extract L2 rules from RULES.md to .claude/rules/
+8. Create implementation task commands (writing-implementation-tasks skill)
+9. After completion -> remove skill or archive
 ```
 
 ## Quality Checklist
 
 ```
-Feature Spec Quality Check:
+Feature Spec (Agent Skill) Quality Check:
+- [ ] Skill name: prd-{feature-name}, matches directory name
+- [ ] Description answers what/who/when with trigger keywords
 - [ ] TL;DR answers what/who/why in under 3 sentences
 - [ ] Every FR has a testable acceptance criterion
 - [ ] User stories use Given-When-Then format
 - [ ] Non-goals list at least one exclusion
 - [ ] No implementation details (those belong in technical design)
-- [ ] L4 separator present between core spec and deep reference
-- [ ] One-line reference added to constitution (L1)
-- [ ] Code-area constraints extracted to L2 rules
-- [ ] File named: specs/prd-{feature-name}.md
-- [ ] Frontmatter status is accurate
+- [ ] references/BACKGROUND.md contains L4 content
+- [ ] references/RULES.md contains extractable L2 constraints
+- [ ] SKILL.md body under 500 lines
+- [ ] Description is specific enough for auto-discovery
 ```
 
 ## Detailed Guides

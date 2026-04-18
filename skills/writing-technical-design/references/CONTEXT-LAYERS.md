@@ -36,6 +36,8 @@ L4      Explicit    ~500 tokens   Rationale & alternatives
 - `specs/design-notifications.md` - Notification architecture
 ```
 
+**Note:** The PRD is an Agent Skill (`skills/prd-{feature}/SKILL.md`) and is auto-discovered via skill metadata — no L1 entry needed for it. Only the design doc needs a constitution reference.
+
 **Why in L1:** Tech stack choices affect every coding decision. An agent must know "use sqlc, not raw SQL" on every request.
 
 ## L2: Component Patterns as Path Rules
