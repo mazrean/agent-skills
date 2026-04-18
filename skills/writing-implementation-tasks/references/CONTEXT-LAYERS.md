@@ -1,50 +1,33 @@
-# Implementation Tasks Context Layer Mapping
+# Implementation Tasks Context Layer Mapping (Command Edition)
 
-Detailed guide on distributing task information across context layers.
+Detailed guide on how implementation task commands interact with context layers.
 
-## Layer Distribution for Task Documents
+## Commands and Context Layers
 
 ```
                     Token Cost
 Layer   Frequency   Per Request   Purpose
 =============================================
-L1      Every req   ~30 tokens    Current task pointer
+L1      Every req   0 tokens      No L1 footprint (commands are on-demand)
 L2      (rarely)    N/A           Tasks don't usually need L2
-L3      On demand   ~600 tokens   Task list + current task details
-L4      Per task    ~200 tokens   Implementation notes per task
+L3      On invoke   ~400 tokens   Single task command content
+L4      Per ref     ~200 tokens   Design doc / PRD sections
 =============================================
 ```
 
-## L1: Current Task Pointer
+**Key difference from files:** Commands have zero L1 cost. They're only loaded when the user invokes them with `/{feature}/task-{N}-{name}`.
 
-**What goes here:** A single line identifying what the agent should work on right now.
+## L1: Not Used
 
-**Why this is critical:** Without L1 tracking, the agent must:
-1. Search for the task document
-2. Read the full task list
-3. Determine which task is current
-4. Then start working
+Commands have no L1 footprint. Unlike skills or constitution entries, commands are not indexed or auto-discovered — they're explicitly invoked by the user.
 
-With L1 tracking, the agent knows immediately on session start.
+**Advantage:** No token cost when not in use. No need to maintain constitution references.
 
-**Format in CLAUDE.md / AGENTS.md:**
-```markdown
-## Current Work
-
-Working on: specs/tasks-notifications.md, Task 3 (Wire up order status events)
-Next: Task 4 (Push delivery via FCM/APNs)
-```
-
-**Update cadence:**
-- Update L1 when completing a task and moving to the next
-- Remove L1 entry when all tasks are done
-- If blocked, update to show blocked status and next unblocked task
-
-**Token cost:** ~30 tokens. Worth the cost because it saves the agent from loading and scanning the full task document on every session start.
+**Trade-off:** User must know the command name. The overview command (`/{feature}/overview`) serves as the entry point for discovery.
 
 ## L2: Rarely Used for Tasks
 
-Tasks don't usually generate path-conditional rules because they're temporary (done once, then completed). However, there's one exception:
+Tasks don't usually generate path-conditional rules because they're temporary. However, there's one exception:
 
 **Temporary coding constraints during multi-task implementation:**
 ```markdown
@@ -54,130 +37,133 @@ paths:
   - "internal/notification/**/*.go"
 ---
 
-WIP: Notification system is under construction (specs/tasks-notifications.md).
+WIP: Notification system is under construction.
 - Tasks 1-2 are complete: data model and sender interface exist
-- Task 3 in progress: event wiring
 - Do NOT add direct FCM calls; use NotificationSender interface
 - Consumer is not yet deployed; events are queued but not processed
 ```
 
 Remove this L2 file after all tasks are complete.
 
-## L3: Task List Structure
+## L3: Single Task Content (On Invoke)
 
-The task list is the primary L3 content. It's loaded when the agent needs to:
-- Find the current task's details
-- Check dependencies before starting
-- Verify what's already done
+When the user runs a task command, only that task's content is loaded. This is the primary advantage of commands over a single task file.
 
-**Optimized structure for agent consumption:**
+**Comparison:**
 
-```
-1. Progress checklist (50 tokens)
-   Quick scan: what's done, what's current, what's ahead.
-   Agent reads this FIRST.
+| Approach | Tokens loaded per task |
+|----------|----------------------|
+| Single tasks file | ~600 tokens (full file) |
+| Command per task | ~400 tokens (just this task) |
 
-2. Current task details (200 tokens)
-   Full instructions for the task marked as current.
-   Agent reads this SECOND.
-
-3. Next task preview (100 tokens)
-   Brief look at what comes after current.
-   Agent reads to understand context.
-
-4. Completed tasks (summary only) (100 tokens)
-   Collapsed or minimal. Agent rarely needs these.
-
-5. Future tasks (brief) (150 tokens)
-   Title + dependencies only. Not full details.
-```
-
-**Total L3 budget:** ~600 tokens when loading the document.
-
-## Task Status Lifecycle
+**Command structure for optimal L3:**
 
 ```
-                ┌──────────┐
-                │  pending  │
-                └────┬─────┘
-                     │ dependencies met
-                ┌────▼─────┐
-           ┌────│in-progress│
-           │    └────┬─────┘
-           │         │
-     ┌─────▼──┐ ┌───▼────┐
-     │blocked │ │  done   │
-     └────┬───┘ └────────┘
-          │ unblocked
-          └──────────┘ (back to in-progress)
+1. background_information (50 tokens)
+   PRD/design links, dependencies, spec refs.
+
+2. instructions (200 tokens)
+   Pre-check, core task, scope, steps.
+
+3. Done When (50 tokens)
+   Executable verification commands.
+
+4. Safety & Fallback (50 tokens)
+   Error handling and dependency checks.
 ```
 
-**L1 constitution should reflect:**
-- `in-progress`: "Working on: Task N"
-- `blocked`: "Blocked: Task N (reason). Working on: Task M instead"
-- `done` (all tasks): Remove current work section
+**Total L3 budget:** ~350-400 tokens per task command.
 
-## Task Completion Protocol
+## L4: Referenced Documents
 
-When the agent completes a task:
+Task commands reference external documents (PRD skill, design doc) rather than including their content. The agent loads these only when needed.
 
-```
-1. Run verification commands from "Done when" section
-2. If all pass:
-   a. Mark task checkbox as [x] in Progress section
-   b. Set task status to "done"
-   c. Update L1 constitution to point to next task
-   d. Commit changes
-3. If verification fails:
-   a. Fix the issue
-   b. Re-run verification
-   c. Do NOT mark as done until verification passes
-```
+**Loading trigger:** The agent loads L4 content when:
+- Interface contracts are needed from the design doc
+- Requirements need clarification from the PRD skill
+- A step references a section in another document
 
-## Dependency Resolution
-
-Agents should check dependencies before starting a task:
-
+**Example references in a task command:**
 ```markdown
-## Task 3: Wire up order status events
-
-- **Status**: pending
-- **Depends on**: Task 1, Task 2
+<background_information>
+- **PRD**: skills/prd-notifications/SKILL.md
+- **Design**: specs/design-notifications.md
+- **Spec refs**: FR-1, FR-3
+</background_information>
 ```
 
-**Agent behavior:**
-1. Read Progress section
-2. Verify Task 1 and Task 2 are marked `[x]`
-3. If not, find the first incomplete dependency and work on that instead
-4. If all dependencies are done, start Task 3
+The agent reads these files only if the instructions alone aren't sufficient.
 
-## Parallel Task Execution
+## Overview Command: The Navigation Layer
 
-Some tasks can be parallelized. Mark them explicitly:
+The overview command (`/{feature}/overview`) serves a unique role — it's the only command that sees all tasks at once:
 
 ```markdown
 ## Progress
 
-- [x] Task 1: Data model
-- [ ] Task 2: FCM sender       (parallel group A)
-- [ ] Task 3: APNs sender      (parallel group A)
-- [ ] Task 4: Consumer wiring  (depends on: Task 2, Task 3)
+- [x] Task 1: Data model → `/notifications/task-1-data-model`
+- [x] Task 2: Sender interface → `/notifications/task-2-sender-interface`
+- [ ] Task 3: Event wiring → `/notifications/task-3-event-wiring`  ← next
+- [ ] Task 4: Push delivery → `/notifications/task-4-push-delivery`
+- [ ] Task 5: Consumer → `/notifications/task-5-consumer`
+- [ ] Task 6: Integration tests → `/notifications/task-6-integration-tests`
 ```
 
-For agents, "parallel" means these tasks have no dependencies on each other and can be done in any order. A single agent works sequentially, but this signals that Task 2 and Task 3 won't conflict.
+**Token cost:** ~200 tokens for the overview. Loaded only when the user asks for status.
 
-## Collapsed Completed Tasks
+## Task Status Lifecycle
 
-Once tasks are done, collapse their details to save tokens when the document is loaded:
+```
+User runs /{feature}/overview
+  → Sees progress, gets next task recommendation
+  → Runs /{feature}/task-{N}-{name}
+    → Agent checks pre-conditions (dependencies)
+    → Agent implements the task
+    → Agent runs verification commands
+    → Reports completion
+  → User runs /{feature}/overview again
+    → Updated progress shown
+```
+
+**No constitution updates needed.** Unlike the file-based approach, there's no L1 entry to maintain. The overview command checks actual code state to determine completion.
+
+## Dependency Resolution
+
+Each task command includes a pre-check section:
 
 ```markdown
-## Task 1: Define notification data model
+## Pre-check
 
-- **Status**: done
-- **Commit**: abc1234
-
-<!-- Details collapsed after completion.
-     Full details available in git history. -->
+Before starting, verify dependencies are complete:
+1. Check that `internal/notification/model.go` exists (from Task 1)
+2. If missing, report: "Task 1 must be completed first.
+   Run /notifications/task-1-data-model"
 ```
 
-This keeps the document lean as tasks accumulate. The agent only needs to see that it's done and can check git history if needed.
+**Agent behavior:**
+1. Run pre-check before starting implementation
+2. If dependencies are missing, report which task to run first
+3. If all dependencies are met, proceed with implementation
+
+## Parallel Task Execution
+
+Some tasks can be run independently. Note this in the overview:
+
+```markdown
+## Dependency Order
+
+Task 1: Data model (no deps)
+├─► Task 2: Sender interface (depends: Task 1)
+├─► Task 3: Event wiring (depends: Task 1)     ← parallel with Task 2
+```
+
+Tasks 2 and 3 can be run in any order after Task 1 completes.
+
+## Completed Task Cleanup
+
+After all tasks are done, the command directory can be:
+- **Kept**: For reference, commands are zero-cost when not invoked
+- **Archived**: Move to `.claude/commands/_archive/{feature}/`
+- **Removed**: Delete the directory entirely
+
+Since commands have zero L1 cost, there's no urgency to clean up.
