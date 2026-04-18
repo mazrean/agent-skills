@@ -6,16 +6,23 @@ Detailed guide on how implementation task commands interact with context layers.
 
 ```
                     Token Cost
-Layer   Frequency   Per Request   Purpose
-=============================================
-L1      Every req   0 tokens      No L1 footprint (commands are on-demand)
-L2      (rarely)    N/A           Tasks don't usually need L2
-L3      On invoke   ~400 tokens   Single task command content
-L4      Per ref     ~200 tokens   Design doc / PRD sections
-=============================================
+Layer   Frequency      Per Request   Purpose
+====================================================================
+L1      Every req      0 tokens      No L1 footprint (commands are on-demand)
+L2      (rarely)       N/A           Tasks don't usually need L2
+L3      On invoke      ~400 tokens   Single task command content
+L3'     Skill match    ~400 tokens   Auto-loaded per-component research digest
+                                      (skills/tech-{component}/SKILL.md —
+                                      triggered by the files the task edits)
+L4      Per ref        ~200 tokens   Design doc / PRD sections
+L4'     Explicit       varies        Component deep reference
+                                      (skills/tech-{component}/references/)
+====================================================================
 ```
 
 **Key difference from files:** Commands have zero L1 cost. They're only loaded when the user invokes them with `/{feature}/task-{N}-{name}`.
+
+**Why L3' matters for tasks:** a task command is small by design (~400 tokens). When it touches, say, `internal/notification/consumer/`, Claude auto-discovers `skills/tech-redis-streams/SKILL.md` via its description and loads the research digest alongside the task instructions. The task command itself does not need to restate API signatures, pitfalls, or version constraints — that content is carried by the component skill, on demand.
 
 ## L1: Not Used
 
@@ -74,13 +81,39 @@ When the user runs a task command, only that task's content is loaded. This is t
 
 **Total L3 budget:** ~350-400 tokens per task command.
 
+## L3': Auto-Discovered Component Skills
+
+Unlike L4 references (which a task command *names*), L3' content is discovered automatically from skill metadata. The task command does not need to list `tech-{component}` skills explicitly — Claude activates them based on the files the task edits and the topics the task mentions.
+
+**How it works:**
+1. Task command instructs the agent to edit `internal/notification/consumer/consumer.go`.
+2. Claude's skill index matches the file path against the `description` field of `skills/tech-redis-streams/SKILL.md` ("files under internal/notification/consumer/").
+3. That skill's body (API subset, pitfalls, integration pattern) loads alongside the task command.
+
+**What this lets the task command omit:**
+- Redis Stream API signatures → covered by `tech-redis-streams`
+- FCM retry semantics → covered by `tech-fcm-android`
+- Version-specific SQL feature notes → covered by `tech-postgres-*`
+
+**Surfacing the link (optional but helpful):** if the task relies on a specific component skill for correctness, mention it in `background_information` so a human reader can follow the same trail:
+
+```markdown
+<background_information>
+- **PRD**: skills/prd-notifications/SKILL.md
+- **Design**: specs/design-notifications.md
+- **Component research**: skills/tech-redis-streams/SKILL.md (auto-loaded)
+- **Spec refs**: FR-1, FR-3
+</background_information>
+```
+
 ## L4: Referenced Documents
 
-Task commands reference external documents (PRD skill, design doc) rather than including their content. The agent loads these only when needed.
+Task commands reference external documents (PRD skill, design doc, `tech-{component}/references/`) rather than including their content. The agent loads these only when needed.
 
 **Loading trigger:** The agent loads L4 content when:
 - Interface contracts are needed from the design doc
 - Requirements need clarification from the PRD skill
+- Extended API tables or benchmarks are needed from `tech-{component}/references/` (L4')
 - A step references a section in another document
 
 **Example references in a task command:**
@@ -88,6 +121,7 @@ Task commands reference external documents (PRD skill, design doc) rather than i
 <background_information>
 - **PRD**: skills/prd-notifications/SKILL.md
 - **Design**: specs/design-notifications.md
+- **Component research**: skills/tech-redis-streams/SKILL.md (auto-loaded when editing consumer/)
 - **Spec refs**: FR-1, FR-3
 </background_information>
 ```

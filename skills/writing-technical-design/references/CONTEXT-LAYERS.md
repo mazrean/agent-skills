@@ -6,14 +6,20 @@ Detailed guide on distributing technical design information across context layer
 
 ```
                     Token Cost
-Layer   Frequency   Per Request   Purpose
-=============================================
-L1      Every req   ~30 tokens    Tech stack + feature ref
-L2      Path match  ~150 tokens   Component-local patterns
-L3      On demand   ~800 tokens   Architecture decisions
-L4      Explicit    ~500 tokens   Rationale & alternatives
-=============================================
+Layer   Frequency      Per Request   Purpose
+====================================================================
+L1      Every req      ~30 tokens    Tech stack + feature ref
+L2      Path match     ~150 tokens   Component-local patterns
+L3      On demand      ~800 tokens   Architecture decisions (design doc)
+L3'     Skill match    ~400 tokens   Per-component research digest
+                                      (skills/tech-{component}/SKILL.md)
+L4      Explicit       ~500 tokens   Rationale & alternatives (design doc)
+L4'     Explicit       varies        Component deep reference
+                                      (skills/tech-{component}/references/)
+====================================================================
 ```
+
+**L3 vs. L3':** L3 holds *architecture* — how the components fit together for *this feature*. L3' holds *component knowledge* — how a given technology works in general, verified against current docs. The design doc stays feature-scoped; the component skill stays technology-scoped. Both are auto-loadable without loading the other.
 
 ## L1: Tech Stack in Constitution
 
@@ -94,6 +100,27 @@ Architecture patterns (specs/design-notifications.md):
 
 **Rule of thumb:** L2 rules are **imperative commands** the agent follows while coding. L3 content is **reference material** the agent consults when planning.
 
+## L3': Component Research Skills
+
+Each non-trivial technical component identified during design lives at `skills/tech-{component}/SKILL.md`. Claude auto-discovers these via the skill `description` field — no explicit import needed when editing code that matches the skill's path / topic pattern.
+
+**What goes in a component skill (L3'):**
+- Identity: version, license, authoritative doc URL, verified date
+- API subset the design actually calls (code, not prose)
+- Operational characteristics (throughput, latency, failure modes)
+- Pitfalls with avoidance rules
+- Idiomatic integration snippet for the project's stack
+- Confidence block (High / Medium / Low with reasons)
+
+**What does NOT go in a component skill:**
+- Feature-specific architecture (that is L3 in the design doc)
+- Imperative path-conditional rules (those are L2)
+- Whole-library documentation (link to upstream docs instead)
+
+See [COMPONENT-SKILLS.md](COMPONENT-SKILLS.md) for the template, naming, and discovery rules.
+
+**Why auto-discovery matters:** the design doc is read once when planning. The component skill is loaded every time the agent edits code in that component's area. L3' research therefore amortizes across every implementation session, review, and debug session for the lifetime of the component.
+
 ## L3: Design Body (Core Content)
 
 **Ordering optimized for agent consumption:**
@@ -151,11 +178,16 @@ Does the agent need this for ALL coding tasks?
    │        Imperative coding constraints
    └─ No
       │
-      Is this needed to plan/implement the feature?
+      Is this feature-specific architecture (how pieces fit together)?
       ├─ Yes → L3 (design body)
       │        Decisions, components, interfaces, data model
-      └─ No → L4 (deep reference)
-               Alternatives, migration, ADR rationale
+      └─ No
+         │
+         Is this per-technology knowledge verified via research?
+         ├─ Yes → L3' (skills/tech-{component}/SKILL.md)
+         │        API subset, pitfalls, integration snippet
+         └─ No → L4 / L4' (deep reference)
+                  Alternatives, migration, ADR, extended API tables
 ```
 
 ## Interface Contracts: The L3 Sweet Spot

@@ -2,18 +2,27 @@
 
 Detailed guide on distributing feature spec information across context layers when the PRD is an Agent Skill.
 
-## The Four-Layer Model
+## The Layer Model
 
 ```
                     Token Cost
-Layer   Frequency   Per Request   Purpose
-=============================================
-L1      Every req   ~20 tokens    Feature discovery (automatic via skill metadata)
-L2      Path match  ~100 tokens   Code-area constraints
-L3      On demand   ~500 tokens   Implementation reference (SKILL.md body)
-L4      Explicit    ~300 tokens   Clarification & context (reference files)
-=============================================
+Layer   Frequency      Per Request   Purpose
+====================================================================
+L1      Every req      ~20 tokens    Feature discovery (automatic via skill metadata)
+L2      Path match     ~100 tokens   Code-area constraints
+L3      On demand      ~500 tokens   Implementation reference (SKILL.md body)
+L3'     Skill match    ~400 tokens   Per-component research digest
+                                      (skills/tech-{component}/SKILL.md — produced
+                                      during the technical design phase, not here)
+L4      Explicit       ~300 tokens   Clarification & context (reference files)
+L4'     Explicit       varies        Component deep reference
+                                      (skills/tech-{component}/references/)
+====================================================================
 ```
+
+**What the PRD owns:** L1 (its own skill metadata), L3 (SKILL.md body), L4 (`references/` files), plus L2 rules extracted from `RULES.md`.
+
+**What the PRD does NOT own:** L3' / L4'. Those belong to the `writing-technical-design` skill — one `tech-{component}` Agent Skill per technical building block (library, framework, protocol, service). The PRD may *link* to them from `BACKGROUND.md` if relevant research already exists, but it does not produce them.
 
 ## L1: Skill Metadata (Automatic)
 
@@ -125,11 +134,16 @@ Is this information needed for EVERY agent request?
    │        Extract from references/RULES.md to .claude/rules/
    └─ No
       │
-      Is this needed to implement the feature?
-      ├─ Yes → L3 (SKILL.md body)
-      │        Requirements, user stories, constraints
-      └─ No → L4 (reference files)
-               Background, research, edge cases
+      Is this per-technology knowledge (API, pitfalls, integration)?
+      ├─ Yes → L3' / L4' (NOT here — belongs to writing-technical-design)
+      │        Produced as skills/tech-{component}/...
+      └─ No
+         │
+         Is this needed to implement the feature?
+         ├─ Yes → L3 (SKILL.md body)
+         │        Requirements, user stories, constraints
+         └─ No → L4 (reference files)
+                  Background, research, edge cases
 ```
 
 ## Example: Full Layer Distribution
@@ -211,3 +225,20 @@ Push notifications would reduce this by an estimated 60%.
 ## L2 Extraction Target
 Extract to .claude/rules/notification-code.md with paths...
 ```
+
+## Cross-Reference to Component Skills (L3' / L4')
+
+When the domain touches technology that already has a research digest under `skills/tech-{component}/`, link it from `BACKGROUND.md`:
+
+```markdown
+<!-- references/BACKGROUND.md -->
+
+## Related Research
+
+- `skills/tech-fcm-android/SKILL.md` — FCM delivery semantics, relevant to FR-2
+- `skills/tech-apns-ios/SKILL.md` — APNs delivery semantics, relevant to FR-2
+```
+
+**Why link, not inline:** component skills are auto-discovered at implementation time via skill metadata. The PRD only needs to point readers at them for context during review; it should not duplicate their content.
+
+**When NOT to link:** if the `tech-{component}` skill does not yet exist. Creating it is the technical design phase's responsibility — do not pre-empt that work from the PRD.
