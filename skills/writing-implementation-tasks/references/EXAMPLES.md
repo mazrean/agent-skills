@@ -34,9 +34,16 @@ allowed-tools: Bash, Read, Glob, Grep
 <instructions>
 ## Execution Steps
 
-1. For each task below, check if the verification commands pass
-2. Report which tasks are complete, which is current, which are pending
-3. Recommend the next task command to run
+1. Read the **Progress** checklist — `- [x]` entries are the source of
+   truth (each task command flips its own box at commit time).
+2. For the first `- [ ]` task, cross-check with git:
+   - the Verify commands do not yet pass, AND
+   - no matching Conventional Commits commit exists
+     (`git log --grep="Task {N}"`).
+3. If the checklist disagrees with git state, report the drift explicitly
+   rather than silently trusting either side.
+4. Report which tasks are complete, which is current, which are pending
+5. Recommend the next task command to run
 
 ## Progress
 
@@ -69,7 +76,7 @@ Report: which tasks are done, which is next, and the command to run it.
 ```markdown
 ---
 description: Create notification data model and database migrations for push notifications
-allowed-tools: Bash, Read, Write, Edit, Glob, Grep
+allowed-tools: Bash, Read, Write, Edit, Glob, Grep, Skill
 ---
 
 # Task 1: Define notification data model and migrations
@@ -94,6 +101,9 @@ Files to create:
 - `internal/notification/model.go`
 - `migrations/005_notifications.sql`
 
+Files to modify:
+- `.claude/commands/notifications/overview.md` (checklist flip only)
+
 Do NOT modify files outside this scope.
 
 ## Steps
@@ -107,21 +117,59 @@ Do NOT modify files outside this scope.
    - device_tokens table with user_id FK, platform, token, created_at
    - notifications table with user_id FK, title, body, status, created_at
    - Appropriate indexes per design doc
-</instructions>
 
-## Done When
+## Verify
 
-Run these verification commands. ALL must pass:
+Run these verification commands. ALL must pass before commit:
 
 ```bash
 go build ./internal/notification/...
 go vet ./internal/notification/...
 ```
 
+## Update Overview
+
+In `.claude/commands/notifications/overview.md`, flip Task 1's checkbox:
+
+- From: `- [ ] Task 1: Define notification data model → /notifications/task-1-data-model`
+- To:   `- [x] Task 1: Define notification data model → /notifications/task-1-data-model`
+
+Stage this edit together with the task files for one atomic commit.
+
+## Commit
+
+After verification passes and overview is updated, invoke the
+`committing-code` skill to create a single atomic commit.
+
+1. `git status` — confirm staged files are exactly:
+   - `internal/notification/model.go`
+   - `migrations/005_notifications.sql`
+   - `.claude/commands/notifications/overview.md`
+2. Invoke `committing-code` with this suggested message:
+
+   ```text
+   feat(notifications): add notification data model and migration
+
+   Implements Task 1 (data-model) for Push Notifications.
+   Spec refs: FR-1, FR-5
+   ```
+
+3. Verify: `git log -1 --stat` — overview.md must appear in the commit.
+</instructions>
+
+## Done When
+
+- [ ] Verify commands all pass
+- [ ] overview.md shows `- [x] Task 1: …`
+- [ ] `git status` clean for the task scope
+- [ ] `git log -1` shows the Task 1 commit (including overview.md)
+
 ## Safety & Fallback
 
 - If design doc doesn't exist, report: "Design doc required. Create specs/design-notifications.md first."
 - If migration numbering conflicts, check existing migrations and adjust
+- Do not commit if verification fails
+- Do not amend or squash prior task commits
 ```
 
 ### task-3-event-wiring.md
@@ -129,7 +177,7 @@ go vet ./internal/notification/...
 ```markdown
 ---
 description: Wire up order status change events to notification stream
-allowed-tools: Bash, Read, Write, Edit, Glob, Grep
+allowed-tools: Bash, Read, Write, Edit, Glob, Grep, Skill
 ---
 
 # Task 3: Wire up order status change events
@@ -159,6 +207,7 @@ Files to create or modify:
 - `internal/notification/event/event.go` (create)
 - `internal/notification/event/publisher.go` (create)
 - `internal/handler/order.go` (modify)
+- `.claude/commands/notifications/overview.md` (checklist flip only)
 
 Do NOT modify files outside this scope.
 
@@ -176,9 +225,8 @@ Do NOT modify files outside this scope.
    - After successful status update in `UpdateOrderStatus` handler
    - Publish `OrderStatusChanged` event to Redis Stream "notifications"
    - Use `XADD` with `MAXLEN ~100000` per design doc decision
-</instructions>
 
-## Done When
+## Verify
 
 ```bash
 go test ./internal/notification/event/...
@@ -186,11 +234,40 @@ go test ./internal/handler/...
 go vet ./...
 ```
 
+## Update Overview
+
+In `.claude/commands/notifications/overview.md`, flip Task 3's line from
+`- [ ] Task 3: …` to `- [x] Task 3: …`. Stage together with task files.
+
+## Commit
+
+After verification passes and overview is updated, invoke the
+`committing-code` skill. Suggested message:
+
+```text
+feat(notifications): publish order status change events
+
+Implements Task 3 (event-wiring) for Push Notifications.
+Spec refs: FR-1, FR-3
+```
+
+Stage only the files listed in Scope (including overview.md).
+Verify with `git log -1 --stat`.
+</instructions>
+
+## Done When
+
+- [ ] Verify commands all pass
+- [ ] overview.md shows `- [x] Task 3: …`
+- [ ] `git status` clean for the task scope
+- [ ] `git log -1` shows the Task 3 commit (including overview.md)
+
 ## Safety & Fallback
 
 - If `internal/handler/order.go` doesn't exist, search for the order handler location with Grep
 - If Redis client injection pattern is unclear, check existing handler patterns in the codebase
-- If verification fails, fix and re-run — do not skip
+- If verification fails, fix and re-run — do not commit a broken state
+- Do not amend the Task 1 commit; create a new commit for Task 3
 ```
 
 ### task-4-push-delivery.md
@@ -198,7 +275,7 @@ go vet ./...
 ```markdown
 ---
 description: Implement FCM and APNs push notification delivery senders
-allowed-tools: Bash, Read, Write, Edit, Glob, Grep
+allowed-tools: Bash, Read, Write, Edit, Glob, Grep, Skill
 ---
 
 # Task 4: Add push notification delivery (FCM/APNs)
@@ -229,6 +306,9 @@ Files to create:
 - `internal/notification/sender/apns.go`
 - `internal/notification/sender/multi.go`
 
+Files to modify:
+- `.claude/commands/notifications/overview.md` (checklist flip only)
+
 Do NOT modify files outside this scope.
 
 ## Steps
@@ -246,19 +326,48 @@ Do NOT modify files outside this scope.
 3. Create `sender/multi.go`:
    - Route to FCM or APNs based on device token platform field
    - Query device tokens from `DeviceTokenRepository`
-</instructions>
 
-## Done When
+## Verify
 
 ```bash
 go test ./internal/notification/sender/...
 go vet ./...
 ```
 
+## Update Overview
+
+In `.claude/commands/notifications/overview.md`, flip Task 4's line from
+`- [ ] Task 4: …` to `- [x] Task 4: …`. Stage together with task files.
+
+## Commit
+
+After verification passes and overview is updated, invoke the
+`committing-code` skill. Suggested message:
+
+```text
+feat(notifications): add FCM and APNs push delivery senders
+
+Implements Task 4 (push-delivery) for Push Notifications.
+Spec refs: FR-2, FR-5
+```
+
+Stage only the files listed in Scope (including overview.md).
+Verify with `git log -1 --stat`.
+</instructions>
+
+## Done When
+
+- [ ] Verify commands all pass
+- [ ] overview.md shows `- [x] Task 4: …`
+- [ ] `git status` clean for the task scope
+- [ ] `git log -1` shows the Task 4 commit (including overview.md)
+
 ## Safety & Fallback
 
 - If go module dependencies need adding, run `go get` for firebase-admin-go and apns2
 - If the Sender interface has changed since Task 2, read the current version first
+- Do not commit a failing state; fix verification first
+- Do not amend prior task commits
 ```
 
 ## Anti-Patterns
@@ -321,9 +430,83 @@ specs/design-notifications.md (Interface Contracts section).
 - The code works correctly
 
 <!-- GOOD: Specific, executable -->
-## Done When
+## Verify
 ```bash
 go test ./internal/notification/sender/...
 go vet ./...
 ```
+```
+
+### Anti-Pattern 5: No Commit Step (work not persisted atomically)
+
+```markdown
+<!-- BAD: Task ends at verification, leaves working tree dirty -->
+## Done When
+```bash
+go test ./...
+```
+
+<!-- GOOD: Task ends with an atomic commit via committing-code skill -->
+## Verify
+```bash
+go test ./...
+```
+
+## Commit
+After verification passes, invoke the `committing-code` skill.
+Suggested message:
+```
+feat(notifications): add sender interface
+
+Implements Task 2 (sender-interface).
+Spec refs: FR-2
+```
+```
+
+### Anti-Pattern 6: Batching Multiple Tasks into One Commit
+
+```markdown
+<!-- BAD: "Commit after you finish Tasks 2 and 3 together" -->
+## Commit
+Once Task 3 is also done, commit everything in one go.
+
+<!-- GOOD: One task = one commit, always -->
+## Commit
+Commit THIS task alone before moving to the next task command.
+Never amend or squash prior task commits.
+```
+
+### Anti-Pattern 7: Overview Checklist Drifts from Git History
+
+```markdown
+<!-- BAD: Task leaves overview.md untouched, so `/feature/overview`
+     misreports progress and nobody can trust the checklist -->
+## Commit
+Just commit the code changes; the overview will be updated manually later.
+
+<!-- BAD: Checklist flip lives in a separate commit -->
+chore(notifications): mark Task 3 as done in overview
+
+<!-- GOOD: Overview flip is part of the SAME atomic commit as the task -->
+## Update Overview
+Flip `- [ ] Task 3: …` to `- [x] Task 3: …` in overview.md, stage it
+together with task files, then commit — one commit contains both the
+change and its "done" marker.
+```
+
+### Anti-Pattern 8: Overview Command Edits the Checklist
+
+```markdown
+<!-- BAD: The overview command mutates its own checklist -->
+<instructions>
+1. For each task, run Verify.
+2. If it passes, edit this file and flip `- [ ]` to `- [x]`.
+</instructions>
+
+<!-- GOOD: Overview is read-only; each task owns its own flip -->
+<instructions>
+1. Read the Progress checklist (source of truth).
+2. Cross-check the first `- [ ]` task against git state; report drift
+   rather than silently editing.
+</instructions>
 ```
