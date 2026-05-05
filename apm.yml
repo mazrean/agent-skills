@@ -1,0 +1,6 @@
+name: agent-skills
+version: 0.1.0
+description: Cross-repo Agent Skill collection for mazrean's projects. Skills are exposed as a top-level `skills/` directory and consumed by `mazrean/apm-plackage/*` packages and individual repositories.
+
+dependencies:
+  apm: []
