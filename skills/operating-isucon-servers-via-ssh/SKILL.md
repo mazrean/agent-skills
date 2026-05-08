@@ -1,128 +1,202 @@
 ---
 name: operating-isucon-servers-via-ssh
-description: Operates ISUCON contest servers via the isucon-ansible Makefile-over-SSH workflow. Use when preparing a benchmark run, deploying repo changes, restarting app/nginx/mysql, switching the active remote with REMOTE_ID, profiling with pprof/fgprof, iterating on slow queries, reassigning roles mid-contest, or collecting kataribe/slow-query logs against isu1/isu2/isu3 hosts; or when the user mentions `make bench`, `make maji`, `make pull`, `make replace`, `make kataribe`, REMOTE_ID switching, or ISUCON server operation in general.
+description: Run commands directly against ISUCON contest hosts (isu1/isu2/isu3) over plain SSH. Use when the user wants to ssh into a contest box and execute commands — checking app/nginx/mysql status, tailing journalctl, restarting services, opening a MySQL shell, running kataribe or pt-query-digest, profiling with pprof through an SSH tunnel, transferring files, or running anything ad-hoc that doesn't have (or doesn't need) a Makefile target. Covers `~/.ssh/config` + agent-forwarding setup, host inventory, server-side paths and service names, common one-liners by category, and SSH patterns (heredoc, port-forward, multi-host, scp/rsync).
 ---
 
 # Operating ISUCON Servers via SSH
 
-Run server operations against ISUCON contest hosts (`isu1`, `isu2`, `isu3`, …) through the Makefile-driven SSH workflow established by the `isucon-ansible` layout. Bench prep, deploys, restarts, profiling, and log collection are all expressed as `make` targets that execute on the remote host through `ssh -t -A`.
+This skill is for the case where you want to **just SSH into a contest box and run a command**. No Makefile wrapper, no playbook — just `ssh isuN '<cmd>'`.
 
-**Use this skill when** preparing servers for a benchmark run, deploying repo changes, restarting services, switching which remote is active, profiling, or pulling logs (kataribe / pt-query-digest) — i.e. any operation that would normally be `ssh isuN '<cmd>'`.
+**Use this skill when** the request is a one-off operation on a contest server: status check, tailing logs, opening a MySQL shell, running kataribe / pt-query-digest, restarting one daemon, copying a file, getting a profile, or any other ad-hoc work over SSH.
 
 **Supporting files:**
-- [USE-CASES.md](references/USE-CASES.md) — step-by-step runbooks for every recurring operational scenario (bootstrap, iterate, profile, slow-query loop, hotfix, role reassignment, cross-host MySQL, etc.).
-- [TARGETS.md](references/TARGETS.md) — full catalog of every Makefile target and what it actually executes.
 - [SSH-SETUP.md](references/SSH-SETUP.md) — the two prerequisites: `Host isuN` aliases and SSH agent forwarding.
+- [USE-CASES.md](references/USE-CASES.md) — multi-step runbooks (bootstrap, bench prep, profiling, slow-query loop, hotfix, role reassignment, cross-host MySQL, etc.) expressed as raw `ssh` sequences.
 
 ## Prerequisites
 
-1. `ssh isu1` / `isu2` / `isu3` works without prompting AND `ssh isu1 'ssh -T git@github.com'` succeeds (agent forwarding). See [SSH-SETUP.md](references/SSH-SETUP.md).
-2. `ansible-playbook -i hosts server.yaml` has been run at least once. That playbook (a) provisions the boxes via the `common` / `tools` / `repo` / `kernel_param` / `fluentbit` roles and (b) renders `.make.env` from `group_vars/all/var.yaml`. **Every variable consumed by the Makefiles below comes from that file.**
+1. `ssh isu1` / `isu2` / `isu3` connects without prompting.
+2. `ssh isu1 'ssh -T git@github.com'` succeeds (your local agent is loaded *and* forwarded).
 
-## Two-Tier Make Workflow
+Fix both before running anything else: see [SSH-SETUP.md](references/SSH-SETUP.md).
 
-Two Makefiles, top-level fans out via `make -C remote`:
+## Inventory
+
+The `isucon-ansible` `hosts` file groups the boxes by role. Default layout:
 
 ```
-[root] Makefile             ← target dispatcher; sets REMOTE_ID → ADDR=606N
-   └─→ [remote/] Makefile   ← SHELL:=ssh, .SHELLFLAGS:=-t -A isu$(REMOTE_ID)
+[app]      isu1, isu2          ← app server (Go binary, debug port 6060)
+[mysql]    isu1                ← DB
+[nginx]    isu1, isu2          ← reverse proxy
+[active:children] app, mysql, nginx
 ```
 
-When `make bench` runs at the repo root, it forwards to `make -C remote bench`, and every recipe line in `remote/Makefile` is shipped as one `ssh isuN <cmd>` invocation. That is why `SHELL` is set to `ssh` rather than to a real shell.
+Use this when deciding which host to ssh into. `host_vars/isuN` carries the IP / user / key for each alias — `~/.ssh/config` should mirror those.
 
-### Selecting the target host
+## Server Layout (paths and service names)
+
+The canonical paths used by `group_vars/all/var.yaml` — verify against your contest:
+
+| What | Path / name |
+|------|-------------|
+| Repo on the remote | `/home/isucon/repo` |
+| App working dir | `/home/isucon/webapp/go` |
+| App systemd unit | `isuride-go.service` |
+| App debug port | `6060` (`/debug/pprof`, `/debug/fgprof`) |
+| App env toggle | `Environment=ISUTOOLS_ENABLE=true|false` in the unit file |
+| nginx config dir | `/etc/nginx` |
+| nginx access log | `/var/log/nginx/access.log` |
+| nginx unit | `nginx.service` |
+| MySQL config dir | `/etc/mysql` |
+| MySQL slow log | `/var/log/mysql/slow-query.log` |
+| MySQL unit | `mysql.service` |
+| MySQL conn | `127.0.0.1:3306 isucon/isucon → isuride` |
+| kataribe config | `/home/isucon/kataribe.toml` |
+| fluent-bit unit | `fluent-bit.service` |
+
+For *your contest's* values (different binary name, different DB name, different paths), grep the inventory:
 
 ```bash
-make pull                    # default REMOTE_ID=1 → ssh isu1
-make REMOTE_ID=2 pull        # ssh isu2
-make REMOTE_ID=3 restart     # ssh isu3
+grep -E 'service|connection|main_conf|log:|directory' group_vars/all/var.yaml
 ```
 
-Always pass `REMOTE_ID=N` from the repo root. Do **not** `cd remote && make …`: `remote/Makefile` includes `../.make.env` and only resolves correctly when invoked from the root.
-
-## Quick Start
+## Quick One-Liners
 
 ```bash
-# Pre-bench (logging + metrics ON)
-for n in 1 2 3; do make REMOTE_ID=$n bench; done
+# Service status
+ssh isu1 'systemctl is-active nginx mysql isuride-go'
 
-# Final scoring run (logging + metrics OFF, slow-query off)
-for n in 1 2 3; do make REMOTE_ID=$n maji; done
+# Recent app log
+ssh isu1 'sudo journalctl -e -u isuride-go --no-pager -n 200'
+
+# Follow app log (Ctrl+C to stop)
+ssh isu1 'sudo journalctl -ef -u isuride-go'
+
+# Restart the app
+ssh isu1 'sudo systemctl restart isuride-go'
+
+# Validate nginx config, then reload
+ssh isu1 'sudo nginx -t && sudo systemctl reload nginx'
+
+# Open a MySQL shell (-t required for the prompt)
+ssh -t isu1 'mysql -h127.0.0.1 -uisucon -pisucon isuride'
+
+# Kataribe over the latest access log
+ssh isu1 'sudo cat /var/log/nginx/access.log | kataribe -f /home/isucon/kataribe.toml'
+
+# Slow-query summary
+ssh isu1 'sudo pt-query-digest /var/log/mysql/slow-query.log | head -100'
+
+# Build & restart the app
+ssh isu1 'cd /home/isucon/webapp/go && go build -o isuride -ldflags "-s -w" . && sudo systemctl restart isuride-go'
+
+# Quick health check
+ssh isu1 'curl -sS -o /dev/null -w "%{http_code} %{time_total}s\n" http://localhost/api/healthz'
 ```
 
-`bench` chains: `backup → pull → replace → fluentbit-enable → metrics-on → access-on → build → restart → slow-on`.
-`maji`  chains: `backup → pull → replace → fluentbit-disable → metrics-off → access-off → build → restart → slow-off`.
+More by category and longer runbooks: [USE-CASES.md](references/USE-CASES.md).
 
-## Common Targets
+## SSH Patterns
 
-| Target | What runs on the remote |
-|--------|--------------------------|
-| `pull` | `git pull` in `$REPO_DIR` |
-| `replace` | Sync `app/`, `nginx/`, `mysql/`, and `other/` from the repo to system paths |
-| `app-replace` / `nginx-replace` / `mysql-replace` | One component only |
-| `restart` | `systemctl restart` for app, nginx, mysql |
-| `app-restart` / `nginx-restart` / `mysql-restart` | One service only |
-| `build` | Run `$BUILD_CMD` (e.g. `go build`) in `$BUILD_DIR` |
-| `nginx-check` | `sudo nginx -t` (auto-run before `nginx-restart`) |
-| `log` / `log-cont` | `journalctl -e [-f] -u $APP_SRV_NAME` |
-| `kataribe` | `kataribe` over the nginx access log |
-| `slow` | `pt-query-digest` over the MySQL slow query log |
-| `mysql` / `mysql-root` | Open a MySQL shell as `$DB_USER` / as root |
-| `slow-on` / `slow-off` | Toggle MySQL slow query logging at runtime |
-| `access-on` / `access-off` | Toggle nginx kataribe-format access log |
-| `metrics-on` / `metrics-off` | Toggle `ISUTOOLS_ENABLE` env var in app systemd unit |
-| `fluentbit-enable` / `fluentbit-disable` | Toggle fluent-bit shipping |
-| `score` | POST a manual score to `localhost:6060/benchmark/score` |
-| `backup` | Move nginx & mysql logs to `~/logs/<epoch>/` on the remote |
+### Multi-line scripts (heredoc)
 
-Full list with chains: [TARGETS.md](references/TARGETS.md).
-
-## Local-Only Targets
-
-These run on your laptop, not via SSH:
+When a one-liner gets ugly, ship a script:
 
 ```bash
-make pprof          # go tool pprof against http://localhost:606${REMOTE_ID}/debug/pprof/profile  (port 8889 UI)
-make fgprof         # go tool pprof against the fgprof endpoint                                   (port 8888 UI)
+ssh isu1 'bash -s' <<'EOF'
+set -euo pipefail
+cd /home/isucon/webapp/go
+go build -o isuride -ldflags "-s -w" .
+sudo systemctl restart isuride-go
+sudo journalctl -e -u isuride-go --since "10 seconds ago"
+EOF
 ```
 
-Both assume an SSH tunnel is forwarding `606${REMOTE_ID}` from your laptop to the app's debug port on the remote. See [USE-CASES.md § Profile a hot endpoint](references/USE-CASES.md#3-profile-a-hot-endpoint-with-pprof).
+**Quote the heredoc tag** (`'EOF'`, with single quotes) so your laptop doesn't expand `$VARS` before they reach the remote.
 
-## Use-Case Workflows
+### Port forwarding (pprof / debug ports)
 
-Pick the runbook that matches the situation. Each one is a sequence of `make` calls plus the verification step. Detailed steps are in [USE-CASES.md](references/USE-CASES.md).
+```bash
+# Background tunnel from laptop:6061 → isu1:6060
+ssh -fN -L 6061:localhost:6060 isu1
 
-| When you want to… | Runbook |
-|----------------------|---------|
-| Bring a fresh contest's boxes online | [§1 First-time bootstrap](references/USE-CASES.md#1-first-time-bootstrap-of-a-new-contest) |
-| Run the prep chain before every measurement bench | [§2 Pre-bench prep](references/USE-CASES.md#2-pre-bench-prep) |
-| Run the official scoring bench | [§3 Maji (final) run](references/USE-CASES.md#3-maji-final-run) |
-| Iterate on a code change in a tight loop | [§4 Develop / build / test loop](references/USE-CASES.md#4-iterative-develop-build-test-loop) |
-| Find which endpoint is the bottleneck | [§5 Investigate slow endpoints](references/USE-CASES.md#5-investigate-slow-endpoints-after-a-bench) |
-| Get a flame graph for a hot endpoint | [§6 Profile with pprof](references/USE-CASES.md#6-profile-a-hot-endpoint-with-pprof) |
-| Optimise a slow query iteratively | [§7 Slow-query optimisation cycle](references/USE-CASES.md#7-slow-query-optimisation-cycle) |
-| Recover from a broken deploy | [§8 Hotfix a broken deploy](references/USE-CASES.md#8-hotfix-when-a-deploy-broke-the-bench) |
-| Move a role (e.g. MySQL) to a different host | [§9 Mid-contest role reassignment](references/USE-CASES.md#9-mid-contest-role-reassignment) |
-| Allow the app on isu1 to reach MySQL on isu2 | [§10 Cross-host MySQL access](references/USE-CASES.md#10-cross-host-mysql-access) |
-| Pre-gzip static assets for `gzip_static on` | [§11 Static asset gzip prep](references/USE-CASES.md#11-static-asset-gzip-prep) |
-| Run an ad-hoc command across all hosts | [§12 Ad-hoc commands & parallel ops](references/USE-CASES.md#12-ad-hoc-commands--parallel-ops) |
-| Tail logs while a bench is running | [§13 Live log tailing during a bench](references/USE-CASES.md#13-live-log-tailing-during-a-bench) |
-| Backport a hand-edit on the remote into the repo | [§14 Backport a hand-edit into the repo](references/USE-CASES.md#14-backport-a-hand-edit-into-the-repo) |
-| Diagnose a rejected my.cnf | [§15 Detect a rejected MySQL config](references/USE-CASES.md#15-detect-a-rejected-mysql-config) |
+# CPU profile through the tunnel
+go tool pprof -http=:8889 'http://localhost:6061/debug/pprof/profile?seconds=30'
 
-## Tips & Gotchas
+# Close it when done
+pkill -f 'ssh -fN -L 6061'
+```
 
-- **Agent forwarding is mandatory.** `pull` invokes `git` against an SSH-only repo on the remote; without `-A` (or a deploy key on the box), it hangs.
-- **`SHELL:=ssh` quoting.** Each recipe line ships as a single `ssh` invocation. Multi-line shell logic uses `.ONESHELL:` plus an explicit `bash -c "…"` (see how `backup` is written) — follow that pattern when adding new targets.
-- **`mysql-restart` post-checks the journal.** It greps for `ignored` and fails if any of the last few lines mention a rejected config; treat a non-zero exit as "my.cnf was rejected, the previous good config is still running".
-- **`access-on` / `access-off` rewrite `nginx.conf` in place** with `sed`. Re-run `nginx-replace` to restore the canonical version from the repo.
-- **`metrics-on` toggles a systemd `Environment=` line.** It runs `daemon-reload`, but you still need `app-restart` afterwards for the change to take effect. (`bench` already includes the restart.)
-- **`REMOTE_ID` is numeric only** (`1`, `2`, `3`). It is interpolated into both `isu$(REMOTE_ID)` and `606$(REMOTE_ID)`.
-- **`replace` is destructive.** It overwrites system config (`/etc/nginx`, `/etc/mysql`, etc.) from the repo. Run `backup` first if the remote has uncommitted manual edits you want to preserve, or backport them first ([§14](references/USE-CASES.md#14-backport-a-hand-edit-into-the-repo)).
-- **Don't run `bench` and `maji` against the same host back-to-back without thinking.** They flip the observability toggles in opposite directions; whichever ran last wins.
+### File transfer
+
+```bash
+# Pull (e.g. backport a hand-edited config)
+scp isu1:/etc/nginx/nginx.conf ./nginx/nginx.conf
+
+# Push to a sudo-owned path — two-step
+scp ./nginx.conf isu1:/tmp/nginx.conf
+ssh isu1 'sudo install -m 0644 /tmp/nginx.conf /etc/nginx/nginx.conf && sudo nginx -t && sudo systemctl reload nginx'
+
+# Sync a directory
+rsync -av ./public/ isu1:/tmp/public-new/
+```
+
+### Multi-host
+
+```bash
+# Sequential
+for n in 1 2 3; do ssh isu$n 'systemctl is-active isuride-go'; done
+
+# Parallel
+for n in 1 2 3; do ssh isu$n 'uptime' & done; wait
+
+# Via ansible (better for sudo / templated args / many hosts)
+ansible -i hosts active -m shell -a 'sudo journalctl -u nginx --since "5 minutes ago"'
+```
+
+### Persistent shell for long ops
+
+```bash
+ssh -t isu1 'tmux new -A -s work'
+# detach with Ctrl-b d, reattach with the same command later
+```
+
+### Connection multiplexing (faster repeated calls)
+
+The `ansible.cfg` ships `ControlMaster auto / ControlPersist 5` for ansible runs only. To get the same behaviour for ad-hoc `ssh` from your laptop, add to `~/.ssh/config`:
+
+```sshconfig
+Host isu*
+    ControlMaster auto
+    ControlPath ~/.ssh/cm-%r@%h:%p
+    ControlPersist 60s
+```
+
+With that in place, the second `ssh isu1 ...` reuses the first's TCP connection and skips re-authentication.
+
+## Pitfalls
+
+- **Add `-t` for anything interactive.** `mysql`, `tmux`, `vim`, `htop` need a PTY. Without it: "the input device is not a TTY" or weirdly line-buffered output.
+- **Quoting traps.** `ssh isu1 "echo $HOME"` expands `$HOME` *on your laptop*. Use single quotes (or escape) when you want the remote shell to evaluate. `ssh isu1 'echo $HOME'` prints `/home/isucon`.
+- **Pipes split between local and remote.** `ssh isu1 "sudo cat /var/log/nginx/access.log" | kataribe` runs `kataribe` *locally*; `ssh isu1 'sudo cat /var/log/nginx/access.log | kataribe -f /home/isucon/kataribe.toml'` runs everything on the remote.
+- **Redirection direction.** `ssh isu1 'sudo nginx -T' > out.txt` writes on your laptop. `ssh isu1 'sudo nginx -T > /tmp/out.txt'` writes on the remote.
+- **`sudo` over SSH** works because the contest user has `NOPASSWD`. If a command unexpectedly hangs, suspect a sudo password prompt — add `-t` so you can type it.
+- **Agent forwarding is required for git on the remote.** Anything that does `git pull`/`push` against the private repo from inside the box uses your forwarded agent.
+- **`ssh isu1 'cd /foo && bar'`** — `cd` only affects that one ssh invocation; the next call starts in `$HOME` again. State doesn't persist between calls. Use heredocs when you need it to.
+- **No `~` expansion in remote-side single-quoted commands** that contain `~/path` *if* the variable is interpolated by your local shell. Prefer absolute paths or `$HOME` (single-quoted, expanded remotely).
+
+## When to reach for the Makefile wrapper
+
+`isucon-ansible` ships a `Makefile` that wraps the same SSH layer:
+
+```bash
+make REMOTE_ID=1 log               # ≡ ssh isu1 'sudo journalctl -e -u isuride-go'
+make REMOTE_ID=1 pull replace build restart   # multi-step bench prep
+```
+
+Use it when the operation is a recurring chain (bench prep, deploy across all hosts). Use raw SSH when the operation is a one-off, an investigation, or doesn't fit any target. The two are interchangeable for individual ops — pick whichever is shorter to type.
 
 ## Resources
 
-- Use-case runbooks: [USE-CASES.md](references/USE-CASES.md)
-- Full target catalog: [TARGETS.md](references/TARGETS.md)
-- SSH config / agent setup: [SSH-SETUP.md](references/SSH-SETUP.md)
+- Connection setup: [SSH-SETUP.md](references/SSH-SETUP.md)
+- Multi-step runbooks (raw SSH): [USE-CASES.md](references/USE-CASES.md)
