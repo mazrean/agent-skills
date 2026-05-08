@@ -1,6 +1,6 @@
 ---
 name: deploying-with-isucon-ansible
-description: Deploys ISUCON contest code and configs to competition servers using the isucon-ansible layout (Ansible playbook for provisioning + Makefile-over-SSH for the per-benchmark loop). Use when running benchmarks, deploying app/nginx/MySQL config changes, reassigning roles between servers, or when working in a repo that uses mazrean/isucon-ansible (server.yaml, hosts inventory, .make.env, remote/Makefile).
+description: Deploys ISUCON contest code and configs to competition servers using the isucon-ansible layout (Ansible playbook for provisioning + Makefile-over-SSH for the per-benchmark loop). The two deploy commands are `make bench` (regular deploy, with instrumentation ON) and `make maji` (final-run deploy, with instrumentation OFF). Use when running benchmarks, deploying app/nginx/MySQL config changes, reassigning roles between servers, or when working in a repo that uses mazrean/isucon-ansible (server.yaml, hosts inventory, .make.env, remote/Makefile).
 ---
 
 # Deploying with isucon-ansible
@@ -16,14 +16,36 @@ ISUCON deployment with this layout is a **two-layer** workflow:
    `nginx`/`mysql` configs into place, toggles instrumentation (access log,
    slow query log, app metrics), rebuilds the binary, and restarts services.
 
-**Use this skill when** you need to push a change and re-benchmark, swap which
-ISU runs which role (mysql/app/nginx), enable or disable instrumentation
-between practice and "maji" (final) runs, or read pprof / kataribe / slow
-query output from a target server.
+**Use this skill when** you need to push a change and re-benchmark (`make
+bench`), do the final scored run (`make maji`), swap which ISU runs which
+role (mysql/app/nginx), or read pprof / kataribe / slow query output from a
+target server.
 
 **Repo-specific values** (service names, paths, repo URL, host IPs) live in
 `group_vars/all/var.yaml`, `.make.env`, `host_vars/isuN`, and `hosts` — never
 hard-code them; let the existing variables drive everything.
+
+## The Two Deploy Commands
+
+There are exactly **two** end-to-end deploy commands. Pick one based on what
+the next run is for:
+
+| Command                      | Purpose                                            | Instrumentation |
+| ---------------------------- | -------------------------------------------------- | --------------- |
+| `make bench REMOTE_ID=N`     | **Regular deploy** for iteration / measured runs.  | **ON**          |
+| `make maji REMOTE_ID=N`      | **Final-run deploy** for the scored / "本気" run.  | **OFF**         |
+
+- **`bench`** is the default for everyday work: it deploys *and* turns on
+  every measurement channel (fluent-bit, app metrics endpoint, nginx
+  access_log in kataribe format, MySQL slow_query_log) so the next benchmark
+  produces analyzable data.
+- **`maji`** ("マジ" = serious / final) is for when you're done iterating and
+  want the highest score: same deploy steps, but every measurement channel is
+  turned off so logging/profiling overhead doesn't cost you points. Use it
+  for the last submitted run.
+
+If in doubt, use `bench`. Only switch to `maji` when you explicitly want to
+sacrifice observability for throughput.
 
 ## Mental Model
 
@@ -35,7 +57,12 @@ ansible-playbook server.yaml ──provision──▶ install tools, deploy syst
                                              per [active] host-group membership
 
 make bench REMOTE_ID=N ──ssh──▶ remote/Makefile on isuN:
-                                  git pull → cp configs → systemctl restart
+                                  git pull → cp configs → instrumentation ON
+                                  → build → restart        (regular deploy)
+
+make maji  REMOTE_ID=N ──ssh──▶ remote/Makefile on isuN:
+                                  git pull → cp configs → instrumentation OFF
+                                  → build → restart        (final deploy)
 ```
 
 The root `Makefile` does nothing locally except `make -C remote $TARGET`,
@@ -106,35 +133,36 @@ ansible-playbook -i hosts monitor.yaml
 ## Per-Benchmark Loop
 
 `REMOTE_ID` selects which server to deploy to (`isu$REMOTE_ID`). It defaults
-to `1`; set it explicitly when deploying to other ISUs:
+to `1`; set it explicitly when deploying to other ISUs. The two top-level
+deploy commands are:
 
 ```bash
-# Deploy + benchmark prep on isu1 (instrumentation ON)
+# Regular deploy (instrumentation ON) — use this for every iteration
 make bench REMOTE_ID=1
 
-# Deploy + final run prep on isu2 (instrumentation OFF — for "maji"/serious runs)
-make maji REMOTE_ID=2
+# Final-run deploy (instrumentation OFF) — use this only for the scored run
+make maji REMOTE_ID=1
 ```
 
-### `bench` vs. `maji`
+### `bench` (regular) vs. `maji` (final): step-by-step
 
-Both pipelines share the same deploy steps; they differ only in
-instrumentation:
+Both share the same deploy steps; the only difference is whether each
+measurement channel is enabled.
 
-| Step                        | `bench` | `maji` |
-| --------------------------- | :-----: | :----: |
-| `backup` access/slow logs   | ✅      | ✅     |
-| `pull` git repo             | ✅      | ✅     |
-| `replace` app/nginx/mysql   | ✅      | ✅     |
-| fluent-bit log shipper      | enable  | disable|
-| app process metrics env var | on      | off    |
-| nginx access_log (kataribe) | on      | off    |
-| MySQL slow_query_log        | on      | off    |
-| `build` Go binary           | ✅      | ✅     |
-| `restart` services          | ✅      | ✅     |
+| Step                        | `bench` (regular) | `maji` (final) |
+| --------------------------- | :---------------: | :------------: |
+| `backup` access/slow logs   | ✅                | ✅             |
+| `pull` git repo             | ✅                | ✅             |
+| `replace` app/nginx/mysql   | ✅                | ✅             |
+| fluent-bit log shipper      | enable            | disable        |
+| app process metrics env var | on                | off            |
+| nginx access_log (kataribe) | on                | off            |
+| MySQL slow_query_log        | on                | off            |
+| `build` Go binary           | ✅                | ✅             |
+| `restart` services          | ✅                | ✅             |
 
 Use `bench` while iterating (you want the data); use `maji` for the final
-scored run (you want max throughput).
+scored run (you want max throughput, no logging overhead).
 
 ### Targeting a Single Subsystem
 
@@ -195,14 +223,14 @@ make fluentbit-disable REMOTE_ID=N
 
 A `metrics-*` or `slow-*` flip on its own doesn't restart the app/MySQL —
 follow with `app-restart` / `mysql-restart` if the change must take effect
-immediately. The bench/maji macros already do this in the right order.
+immediately. The `bench`/`maji` macros already do this in the right order.
 
 ## Typical Workflows
 
-### "I changed Go code"
+### "I changed Go code" — regular deploy
 
 ```bash
-make bench REMOTE_ID=1     # pull, replace app+config, instrumentation on, build, restart
+make bench REMOTE_ID=1     # regular deploy: pull, replace, instrumentation ON, build, restart
 # run benchmark
 make kataribe REMOTE_ID=1  # nginx breakdown
 make slow     REMOTE_ID=1  # slow query digest
@@ -225,16 +253,18 @@ make nginx-restart REMOTE_ID=1
    `mysql.connection.host`, plus the contest app's env/config), commit, push,
    then `make bench REMOTE_ID=<app-host>`.
 
-### "Final scoring run"
+### "Final scoring run" — final deploy
 
 ```bash
-make maji REMOTE_ID=1
+make maji REMOTE_ID=1      # final deploy: same as bench, but instrumentation OFF
 make maji REMOTE_ID=2
 make maji REMOTE_ID=3
 # trigger benchmark
 ```
 
 Run `maji` against **every** active host so logs/metrics are off everywhere.
+After the scored run finishes, switch back to `make bench` for the next
+iteration so measurements come back on.
 
 ## Pre-flight Checklist
 
@@ -251,8 +281,12 @@ Before the first deploy in a fresh checkout:
 
 ## Gotchas
 
-- **`REMOTE_ID` is per-invocation, not sticky.** `make bench` deploys to
-  exactly one server; you must run it once per active app host.
+- **`bench` is regular; `maji` is final-only.** Don't run `maji` while
+  iterating — you'll lose the kataribe / slow-query / metrics data you need
+  to decide what to optimize next. Conversely, don't submit a `bench`-prepped
+  run as the scored run — instrumentation overhead is non-trivial.
+- **`REMOTE_ID` is per-invocation, not sticky.** `make bench` / `make maji`
+  deploys to exactly one server; run it once per active app host.
 - **`replace` is destructive on the server side** — it `cp -r -T`'s repo
   contents over `/etc/nginx`, `/etc/mysql`, `$APP_BASE`. Hand-edits on the
   server are lost on the next deploy. Always edit in the contest repo.
