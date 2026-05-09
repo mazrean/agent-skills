@@ -1,0 +1,46 @@
+# Snippet for /etc/mysql/mysql.conf.d/mysqld.cnf
+# ISUCON-style MySQL tuning. Restart MySQL after changes:
+#   sudo systemctl restart mysql
+
+[mysqld]
+# Listening address: 0.0.0.0 needed once you split DB to its own instance.
+bind-address = 0.0.0.0
+
+# Connection limits
+max_connections = 1024
+
+# Slow query log — measurement phase
+slow_query_log = 1
+slow_query_log_file = /var/log/mysql/slow.log
+long_query_time = 0
+log_queries_not_using_indexes = 1
+# For final benchmark, set:
+#   slow_query_log = 0
+#   long_query_time = 999
+
+# InnoDB tuning
+# Tune innodb_buffer_pool_size to ~50% of available RAM.
+# A 1GB RAM instance: 512M is reasonable.
+innodb_buffer_pool_size = 1G
+
+# ISUCON-style durability tradeoff (read regulation first)
+innodb_flush_log_at_trx_commit = 0
+innodb_flush_method = O_DIRECT
+sync_binlog = 0
+
+# Logging buffer
+innodb_log_buffer_size = 64M
+innodb_log_file_size = 256M
+
+# Disable binlog — almost never needed in ISUCON
+disable-log-bin
+
+# Skip name resolution for client connections
+skip-name-resolve
+
+# Character set
+character-set-server = utf8mb4
+collation-server = utf8mb4_general_ci
+
+[client]
+default-character-set = utf8mb4

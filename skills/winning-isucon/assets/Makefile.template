@@ -1,0 +1,74 @@
+# ISUCON Makefile template
+# Copy to /home/isucon/Makefile and adjust APP_SERVICE / paths.
+
+APP_SERVICE := isuride-go.service
+APP_DIR     := /home/isucon/webapp/go
+APP_BIN     := isuride
+NGINX_LOG   := /var/log/nginx/access.log
+MYSQL_LOG   := /var/log/mysql/slow.log
+
+# alp tuning
+ALP_SORT := sum
+ALP_M    := /api/chair/[a-z0-9-]+,/api/app/rides/[a-z0-9-]+,/api/owner/chairs/[a-z0-9-]+
+
+.PHONY: help
+help:
+	@echo "ISUCON Makefile targets:"
+	@echo "  make build         - build Go binary"
+	@echo "  make deploy        - build and restart app service"
+	@echo "  make bench-prep    - rotate logs, restart app, ready for bench"
+	@echo "  make alp           - show nginx access log analysis"
+	@echo "  make slow          - show MySQL slow query analysis"
+	@echo "  make pprof         - capture 30s CPU profile and open in browser"
+	@echo "  make rotate        - truncate logs"
+	@echo "  make restart       - restart app + nginx + mysql"
+	@echo "  make logs          - tail app logs"
+
+.PHONY: build
+build:
+	cd $(APP_DIR) && go build -o $(APP_BIN)
+
+.PHONY: deploy
+deploy: build
+	sudo systemctl stop $(APP_SERVICE)
+	sudo systemctl start $(APP_SERVICE)
+
+.PHONY: bench-prep
+bench-prep: rotate
+	sudo systemctl restart $(APP_SERVICE)
+	@echo "ready for benchmark"
+
+.PHONY: rotate
+rotate:
+	sudo truncate -s 0 $(NGINX_LOG) || true
+	sudo truncate -s 0 $(MYSQL_LOG) || true
+
+.PHONY: alp
+alp:
+	sudo cat $(NGINX_LOG) | alp ltsv --sort=$(ALP_SORT) -r -m "$(ALP_M)"
+
+.PHONY: slow
+slow:
+	sudo pt-query-digest $(MYSQL_LOG) | head -120
+
+.PHONY: pprof
+pprof:
+	go tool pprof -http=:8080 http://localhost:6060/debug/pprof/profile?seconds=30
+
+.PHONY: restart
+restart:
+	sudo systemctl restart mysql
+	sudo systemctl restart $(APP_SERVICE)
+	sudo systemctl reload nginx
+
+.PHONY: logs
+logs:
+	sudo journalctl -u $(APP_SERVICE) -f --since "5 min ago"
+
+# Endgame: disable measurement overhead
+.PHONY: prod-mode
+prod-mode:
+	sudo sed -i 's|access_log $(NGINX_LOG) ltsv|access_log off|' /etc/nginx/nginx.conf
+	sudo systemctl reload nginx
+	sudo mysql -e "SET GLOBAL slow_query_log = 0;"
+	@echo "logging minimized — run final bench now"

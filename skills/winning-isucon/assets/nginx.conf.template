@@ -1,0 +1,68 @@
+# Snippet for /etc/nginx/nginx.conf
+# Adds LTSV access log (alp-friendly) and tuning directives.
+# Drop the http {} block contents into your existing config.
+
+worker_processes auto;
+worker_rlimit_nofile 65535;
+
+events {
+    worker_connections 4096;
+    multi_accept on;
+}
+
+http {
+    log_format ltsv "time:$time_iso8601"
+                  "\thost:$remote_addr"
+                  "\tmethod:$request_method"
+                  "\turi:$request_uri"
+                  "\tstatus:$status"
+                  "\tsize:$body_bytes_sent"
+                  "\treqtime:$request_time"
+                  "\tupstime:$upstream_response_time"
+                  "\tua:$http_user_agent";
+
+    access_log /var/log/nginx/access.log ltsv;
+    error_log  /var/log/nginx/error.log warn;
+
+    sendfile     on;
+    tcp_nopush   on;
+    tcp_nodelay  on;
+    keepalive_timeout 65;
+    keepalive_requests 1000;
+    server_tokens off;
+
+    # gzip — verify benchmarker tolerates it
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript text/xml;
+    gzip_min_length 1024;
+
+    # upstream for app
+    upstream app {
+        server 127.0.0.1:8080;
+        # Add more app backends after splitting:
+        # server 192.168.0.12:8080;
+        keepalive 64;
+    }
+
+    server {
+        listen 80 default_server;
+        listen [::]:80 default_server;
+
+        # static files served directly
+        location /static/ {
+            alias /home/isucon/webapp/public/;
+            expires 1d;
+            add_header Cache-Control "public, max-age=86400";
+            access_log off;
+        }
+
+        location / {
+            proxy_pass http://app;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        }
+    }
+}
