@@ -5,7 +5,7 @@ description: Analyzes a Web Speed Hackathon project, researches each improvement
 
 # Planning WSH Improvements
 
-Analyzes a Web Speed Hackathon project, identifies performance bottlenecks, researches each improvement topic in depth, stores findings as reusable Agent Skills, and generates executable Claude Code commands. Every command references the relevant skill and includes mandatory Lighthouse score check followed by VRT verification.
+Analyzes a Web Speed Hackathon project, identifies performance bottlenecks, researches each improvement topic in depth, stores findings as reusable Agent Skills, and generates executable Claude Code commands. Every command references the relevant skill and includes mandatory Lighthouse score check followed by quick visual verification (curl + Playwright screenshot).
 
 **Use this skill when** starting a WSH competition, creating an optimization plan, or when the user asks to generate improvement commands for a WSH project.
 
@@ -26,9 +26,8 @@ Before generating any plan, gather data:
 4. **Check server code** — Look for artificial delays, N+1 queries, missing compression
 5. **Check bundle size** — Run `npm run build` if needed, inspect output
 6. **Scan for known WSH traps** — See [IMPROVEMENT-CATALOG.md](references/IMPROVEMENT-CATALOG.md)
-7. **Read VRT config** — `playwright.config.ts` or similar, understand how VRT runs
-8. **Run Lighthouse baseline** — Measure and record scores for all scored pages before any changes
-9. **Run VRT baseline** — Confirm VRT passes before any changes
+7. **Run Lighthouse baseline** — Measure and record scores for all scored pages before any changes
+8. **Quick visual baseline** — Confirm key pages load correctly via curl + screenshot before any changes
 
 ### Step 2: Research & Generate Skills
 
@@ -129,9 +128,9 @@ Total baseline: {sum} pts
 
 - Run commands in order (highest impact first)
 - Each command references its skill for implementation knowledge
-- Flow per command: Changes → Build → Lighthouse → VRT → Commit → PR
+- Flow per command: Changes → Build → Lighthouse → Quick visual check → Commit → PR
 - Assumes a dedicated improvement branch is already checked out
-- If VRT fails, the command will guide you through resolution
+- If visual check fails, the command will guide you through resolution
 - Each successful command produces a PR with Lighthouse results
 ```
 
@@ -149,9 +148,9 @@ For each improvement, create a command file at `.claude/commands/wsh-{NNN}-{name
 3. **Have clear scope** — Exactly ONE improvement per command
 4. **Include concrete steps** — Specific files, line numbers, changes
 5. **Build verification** — Must build successfully
-6. **Lighthouse score check** — Measure score impact on affected pages BEFORE VRT
-7. **VRT gate** — MUST run VRT and handle results
-8. **Commit & PR** — Commit on VRT pass, push, and create a PR with Lighthouse results and VRT status
+6. **Lighthouse score check** — Measure score impact on affected pages
+7. **Quick visual check** — curl for HTTP 200 + Playwright screenshot for visual spot-check (NOT full VRT/e2e)
+8. **Commit & PR** — Commit on verification pass, push, and create a PR with Lighthouse results
 
 ### Step 6: Verify and Report
 
@@ -164,14 +163,15 @@ After generating all skills and commands:
 
 ## Important Rules
 
-- **Never skip VRT in any generated command** — Non-negotiable
-- **Always run Lighthouse before VRT** — Confirm score improvement, then confirm visual integrity
-- **Always commit and create PR after VRT passes** — Assumes improvement branch is already checked out
+- **Never skip visual verification in any generated command** — At minimum: curl HTTP 200 check + Playwright screenshot
+- **Always run Lighthouse before visual check** — Confirm score improvement, then confirm visual integrity
+- **Do NOT run full e2e/VRT suites in generated commands** — Too slow for iterative development; use curl + screenshot instead
+- **Always commit and create PR after verification passes** — Assumes improvement branch is already checked out
 - **One improvement per command** — Atomic and bisectable
 - **Research before generating** — Every non-trivial command should have a backing skill
 - **Skills contain knowledge, commands contain actions** — Keep this separation clean
 - **Commands must be self-contained** — Include all context needed (referencing the skill for background)
-- **Include rollback guidance** — If VRT fails, guide revert
+- **Include rollback guidance** — If visual check fails, guide revert
 - **Reference specific files and line numbers** — No vague instructions
 - **Adapt to the project** — Read the actual codebase
 - **Check regulation** — Exclude rule-violating optimizations
