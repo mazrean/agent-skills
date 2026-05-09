@@ -64,14 +64,14 @@ Rough point gains from common optimizations (varies by app):
 
 ```bash
 # CLI (closest to scoring environment)
-npx lighthouse http://localhost:3000 \
+npx lighthouse http://wsh.localhost:1355 \
   --only-categories=performance \
   --chrome-flags="--headless --no-sandbox" \
   --output=json --output-path=./lh-report.json
 
 # Multiple pages
 for url in "/" "/page1" "/page2"; do
-  npx lighthouse "http://localhost:3000${url}" \
+  npx lighthouse "http://wsh.localhost:1355${url}" \
     --only-categories=performance \
     --chrome-flags="--headless --no-sandbox" \
     --output=html --output-path="./lh-report${url//\//-}.html"

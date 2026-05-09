@@ -18,8 +18,8 @@ Prevents disqualification in Web Speed Hackathon by running Visual Regression Te
 # 1. Install dependencies (first time only)
 npx playwright install --with-deps chromium
 
-# 2. Start the app
-npm run build && npm run start &
+# 2. Start the app (portless assigns http://wsh.localhost:1355)
+npm run build && portless wsh npm run start &
 
 # 3. Run VRT
 npx playwright test --project=vrt
@@ -41,10 +41,11 @@ npx playwright show-report
 Run the full VRT check cycle:
 
 ```bash
-# Build and start (ensure latest changes are reflected)
-npm run build && npm run start &
+# Build and start (portless assigns http://wsh.localhost:1355)
+npm run build && portless wsh npm run start &
 
 # Wait for server to be ready, then run VRT
+timeout 30 bash -c 'until curl -s http://wsh.localhost:1355 > /dev/null 2>&1; do sleep 1; done'
 npx playwright test --project=vrt
 ```
 

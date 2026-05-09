@@ -116,7 +116,7 @@ pyftsubset NotoSansJP-Regular.ttf \
 
 ### glyphhanger (Automatic Subsetting)
 ```bash
-npx glyphhanger http://localhost:3000 --subset=fonts/NotoSansJP-Regular.ttf --formats=woff2
+npx glyphhanger http://wsh.localhost:1355 --subset=fonts/NotoSansJP-Regular.ttf --formats=woff2
 ```
 
 ### Font CSS

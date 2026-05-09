@@ -67,8 +67,8 @@ await page.waitForFunction(() => document.fonts.ready);
 
 **Fix**: Wait for the server to be ready before running tests:
 ```bash
-# Wait for server to respond
-timeout 30 bash -c 'until curl -s http://localhost:3000 > /dev/null 2>&1; do sleep 1; done'
+# Wait for server to respond (portless URL)
+timeout 30 bash -c 'until curl -s http://wsh.localhost:1355 > /dev/null 2>&1; do sleep 1; done'
 npx playwright test --project=vrt
 ```
 
@@ -76,11 +76,11 @@ npx playwright test --project=vrt
 
 **Symptom**: Server fails to start, tests hit wrong application.
 
-**Fix**: Kill existing processes and use consistent port:
+**Fix**: Use portless to avoid port conflicts entirely:
 ```bash
-lsof -ti:3000 | xargs kill -9 2>/dev/null
-npm run start &
+portless wsh npm run start &
 ```
+portless assigns a random port via `PORT` env var and routes through `http://wsh.localhost:1355`, so port conflicts are eliminated.
 
 ### Missing Chromium
 
