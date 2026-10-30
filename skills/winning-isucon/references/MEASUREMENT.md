@@ -174,4 +174,5 @@ This single trick saves enormous time when grepping for "where does this query c
 1. **Truncate logs before each run.** A mixed log gives mixed signals.
 2. **Same benchmark settings each run.** Otherwise you cannot compare scores.
 3. **Capture the alp/pt-query-digest output to a file with the score and commit hash.** You will want the trail when deciding what to revert.
-4. **Disable measurement overhead before the final benchmark.** `pprof` HTTP, `long_query_time = 0`, and full nginx logging together can cost 5–15% of the score.
+4. **Rank work by points per CPU-ms per request class.** Divide each scenario's score share (from the manual's scoring table and the bench log) by the CPU the hosts spend on its requests (profile + access log). In one problem, organizer/admin requests yielded ~18× the points per CPU-ms of player sessions — and their latency gated how much player load the bench added. Optimise the high-yield, load-gating class first.
+5. **Disable measurement overhead before the final benchmark.** `pprof` HTTP, `long_query_time = 0`, and full nginx logging together can cost 5–15% of the score.

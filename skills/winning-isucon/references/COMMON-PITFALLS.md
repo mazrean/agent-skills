@@ -107,6 +107,7 @@ The benchmarker simulates real users. Two patterns break naive optimizations:
 
 - **Keep-alive across requests**: per-request work that allocates a fresh struct per request blows up the GC. Reuse `sync.Pool` for response builders.
 - **Concurrency level varies during a run**: a benchmark may start with 5 workers and ramp to 50. An optimization that helps at low concurrency (e.g., naive in-process locking) can collapse at high concurrency.
+- **A fast app can crash the client**: adaptive scenarios add workers as responses get faster. After an in-memory rewrite one bench grew to ~580 workers in 2 s and died on its own fd limit (`too many open files`), then — with a longer keepalive — on ephemeral ports (`cannot assign requested address`). Both are FAILs you can only fix server-side: set the client `keepalive_timeout` from the measured inter-request gap CDF (see `tuning-isucon-linux-and-nginx`/NGINX.md) and use documented 429 + `Retry-After` throttling if the manual allows it.
 
 **Defense:** Look at the benchmark log's per-second throughput, not just final score. A run that peaks then drops indicates contention or pool exhaustion under increasing load.
 
