@@ -1,0 +1,264 @@
+--- a/drivers/net/ethernet/amazon/ena/ena_xdp.c
++++ b/drivers/net/ethernet/amazon/ena/ena_xdp.c
+@@ -5,6 +5,10 @@
+ 
+ #include "ena_xdp.h"
+ 
++bool ena_xdp_shared_tx = true;
++module_param_named(xdp_shared_tx, ena_xdp_shared_tx, bool, 0444);
++MODULE_PARM_DESC(xdp_shared_tx, "XDP_TX uses the regular Tx rings instead of dedicated XDP queues");
++
+ static int validate_xdp_req_id(struct ena_ring *tx_ring, u16 req_id)
+ {
+ 	struct ena_tx_buffer *tx_info;
+@@ -29,6 +33,7 @@
+ 	u32 size;
+ 
+ 	tx_info->xdpf = xdpf;
++	tx_info->is_xdp = 1;
+ 	data = tx_info->xdpf->data;
+ 	size = tx_info->xdpf->len;
+ 
+@@ -82,6 +87,11 @@
+ 	u16 next_to_use, req_id;
+ 	int rc;
+ 
++	if (ena_xdp_shared_tx &&
++	    unlikely(!ena_com_sq_have_enough_space(tx_ring->ena_com_io_sq,
++						   2 * (tx_ring->sgl_size + 2))))
++		return -ENOSPC;
++
+ 	next_to_use = tx_ring->next_to_use;
+ 	req_id = tx_ring->free_ids[next_to_use];
+ 	tx_info = &tx_ring->tx_buffer_info[req_id];
+@@ -114,6 +124,7 @@
+ 	ena_unmap_tx_buff(tx_ring, tx_info);
+ err:
+ 	tx_info->xdpf = NULL;
++	tx_info->is_xdp = 0;
+ 
+ 	return rc;
+ }
+@@ -135,12 +146,16 @@
+ 	if (!READ_ONCE(adapter->rx_ring->xdp_bpf_prog))
+ 		return -ENXIO;
+ 
+-	qid = smp_processor_id() % adapter->xdp_num_queues;
+-	qid += adapter->xdp_first_ring;
++	if (ena_xdp_shared_tx) {
++		qid = smp_processor_id() % adapter->num_io_queues;
++	} else {
++		qid = smp_processor_id() % adapter->xdp_num_queues;
++		qid += adapter->xdp_first_ring;
++	}
+ 	tx_ring = &adapter->tx_ring[qid];
+ 
+ 	/* Other CPU ids might try to send thorugh this queue */
+-	spin_lock(&tx_ring->xdp_tx_lock);
++	ena_xdp_tx_lock(tx_ring);
+ 
+ 	for (i = 0; i < n; i++) {
+ 		if (ena_xdp_xmit_frame(tx_ring, adapter, frames[i], 0))
+@@ -152,7 +167,7 @@
+ 	if (flags & XDP_XMIT_FLUSH)
+ 		ena_ring_tx_doorbell(tx_ring);
+ 
+-	spin_unlock(&tx_ring->xdp_tx_lock);
++	ena_xdp_tx_unlock(tx_ring);
+ 
+ 	/* Return number of packets sent */
+ 	return nxmit;
+@@ -161,7 +176,9 @@
+ static void ena_init_all_xdp_queues(struct ena_adapter *adapter)
+ {
+ 	adapter->xdp_first_ring = adapter->num_io_queues;
+-	adapter->xdp_num_queues = adapter->num_io_queues;
++	adapter->xdp_num_queues = ena_xdp_shared_tx ? 0 : adapter->num_io_queues;
++	if (!adapter->xdp_num_queues)
++		return;
+ 
+ 	ena_init_io_rings(adapter,
+ 			  adapter->xdp_first_ring,
+@@ -399,6 +416,7 @@
+ 
+ 		xdpf = tx_info->xdpf;
+ 		tx_info->xdpf = NULL;
++		tx_info->is_xdp = 0;
+ 		ena_unmap_tx_buff(tx_ring, tx_info);
+ 		xdp_return_frame(xdpf);
+ 
+--- a/drivers/net/ethernet/amazon/ena/ena_xdp.h
++++ b/drivers/net/ethernet/amazon/ena/ena_xdp.h
+@@ -61,10 +61,42 @@
+ 	return !!ring->xdp_bpf_prog;
+ }
+ 
++/* When true, XDP_TX/ndo_xdp_xmit use the regular Tx rings (serialized with
++ * the stack via the netdev Tx queue lock) instead of dedicated XDP Tx queues,
++ * so XDP does not require halving the channel count.
++ */
++extern bool ena_xdp_shared_tx;
++
+ static inline bool ena_xdp_legal_queue_count(struct ena_adapter *adapter,
+ 					     u32 queues)
+ {
+-	return 2 * queues <= adapter->max_num_io_queues;
++	return ena_xdp_shared_tx || 2 * queues <= adapter->max_num_io_queues;
++}
++
++/* Lock protecting the Tx ring used for XDP transmission */
++static inline void ena_xdp_tx_lock(struct ena_ring *tx_ring)
++{
++	if (ena_xdp_shared_tx)
++		__netif_tx_lock(netdev_get_tx_queue(tx_ring->netdev, tx_ring->qid),
++				smp_processor_id());
++	else
++		spin_lock(&tx_ring->xdp_tx_lock);
++}
++
++static inline void ena_xdp_tx_unlock(struct ena_ring *tx_ring)
++{
++	if (ena_xdp_shared_tx)
++		__netif_tx_unlock(netdev_get_tx_queue(tx_ring->netdev, tx_ring->qid));
++	else
++		spin_unlock(&tx_ring->xdp_tx_lock);
++}
++
++/* Ring the doorbell once for all XDP_TX frames queued during a NAPI poll */
++static inline void ena_xdp_tx_flush(struct ena_ring *tx_ring)
++{
++	ena_xdp_tx_lock(tx_ring);
++	ena_ring_tx_doorbell(tx_ring);
++	ena_xdp_tx_unlock(tx_ring);
+ }
+ 
+ static inline enum ena_xdp_errors_t ena_xdp_allowed(struct ena_adapter *adapter)
+@@ -104,14 +136,16 @@
+ 		/* Find xmit queue */
+ 		xdp_ring = rx_ring->xdp_ring;
+ 
+-		/* The XDP queues are shared between XDP_TX and XDP_REDIRECT */
+-		spin_lock(&xdp_ring->xdp_tx_lock);
++		/* The XDP queues are shared between XDP_TX and XDP_REDIRECT
++		 * (and with the stack when ena_xdp_shared_tx). The doorbell is
++		 * written once at the end of the NAPI poll (ena_xdp_tx_flush).
++		 */
++		ena_xdp_tx_lock(xdp_ring);
+ 
+-		if (ena_xdp_xmit_frame(xdp_ring, rx_ring->adapter, xdpf,
+-				       XDP_XMIT_FLUSH))
++		if (ena_xdp_xmit_frame(xdp_ring, rx_ring->adapter, xdpf, 0))
+ 			xdp_return_frame(xdpf);
+ 
+-		spin_unlock(&xdp_ring->xdp_tx_lock);
++		ena_xdp_tx_unlock(xdp_ring);
+ 		xdp_stat = &rx_ring->rx_stats.xdp_tx;
+ 		verdict = ENA_XDP_TX;
+ 		break;
+--- a/drivers/net/ethernet/amazon/ena/ena_netdev.c
++++ b/drivers/net/ethernet/amazon/ena/ena_netdev.c
+@@ -220,7 +220,8 @@
+ 			rxr->empty_rx_queue = 0;
+ 			rxr->rx_headroom = NET_SKB_PAD;
+ 			adapter->ena_napi[i].dim.mode = DIM_CQ_PERIOD_MODE_START_FROM_EQE;
+-			rxr->xdp_ring = &adapter->tx_ring[i + adapter->num_io_queues];
++			rxr->xdp_ring = ena_xdp_shared_tx ? txr :
++				&adapter->tx_ring[i + adapter->num_io_queues];
+ 		}
+ 	}
+ }
+@@ -719,10 +720,12 @@
+ 
+ 		ena_unmap_tx_buff(tx_ring, tx_info);
+ 
+-		if (is_xdp_ring)
++		if (is_xdp_ring || tx_info->is_xdp)
+ 			xdp_return_frame(tx_info->xdpf);
+ 		else
+ 			dev_kfree_skb_any(tx_info->skb);
++		tx_info->skb = NULL;
++		tx_info->is_xdp = 0;
+ 	}
+ 
+ 	if (!is_xdp_ring)
+@@ -813,6 +816,7 @@
+ 	u16 next_to_clean;
+ 	u16 req_id;
+ 	int tx_pkts = 0;
++	int xdp_pkts = 0;
+ 	int rc;
+ 
+ 	next_to_clean = tx_ring->next_to_clean;
+@@ -836,6 +840,25 @@
+ 			break;
+ 
+ 		tx_info = &tx_ring->tx_buffer_info[req_id];
++
++		if (tx_info->is_xdp) {
++			/* XDP_TX frame on a shared ring: no BQL accounting */
++			struct xdp_frame *xdpf = tx_info->xdpf;
++
++			tx_info->xdpf = NULL;
++			tx_info->is_xdp = 0;
++			tx_info->last_jiffies = 0;
++			ena_unmap_tx_buff(tx_ring, tx_info);
++			xdp_return_frame(xdpf);
++			tx_pkts++;
++			total_done += tx_info->tx_descs;
++			tx_ring->free_ids[next_to_clean] = req_id;
++			next_to_clean = ENA_TX_RING_IDX_NEXT(next_to_clean,
++							     tx_ring->ring_size);
++			xdp_pkts++;
++			continue;
++		}
++
+ 		skb = tx_info->skb;
+ 
+ 		/* prefetch skb_end_pointer() to speedup skb_shinfo(skb) */
+@@ -863,7 +886,7 @@
+ 	tx_ring->next_to_clean = next_to_clean;
+ 	ena_com_comp_ack(tx_ring->ena_com_io_sq, total_done);
+ 
+-	netdev_tx_completed_queue(txq, tx_pkts, tx_bytes);
++	netdev_tx_completed_queue(txq, tx_pkts - xdp_pkts, tx_bytes);
+ 
+ 	netif_dbg(tx_ring->adapter, tx_done, tx_ring->netdev,
+ 		  "tx_poll: q %d done. total pkts: %d\n",
+@@ -1312,12 +1335,16 @@
+ 
+ 	if (xdp_flags & ENA_XDP_REDIRECT)
+ 		xdp_do_flush();
++	if (xdp_flags & ENA_XDP_TX)
++		ena_xdp_tx_flush(rx_ring->xdp_ring);
+ 
+ 	return work_done;
+ 
+ error:
+ 	if (xdp_flags & ENA_XDP_REDIRECT)
+ 		xdp_do_flush();
++	if (xdp_flags & ENA_XDP_TX)
++		ena_xdp_tx_flush(rx_ring->xdp_ring);
+ 
+ 	adapter = netdev_priv(rx_ring->netdev);
+ 
+@@ -2391,7 +2418,7 @@
+ 	if (ena_xdp_present(adapter) &&
+ 	    ena_xdp_allowed(adapter) == ENA_XDP_ALLOWED) {
+ 		adapter->xdp_first_ring = new_channel_count;
+-		adapter->xdp_num_queues = new_channel_count;
++		adapter->xdp_num_queues = ena_xdp_shared_tx ? 0 : new_channel_count;
+ 		if (prev_channel_count > new_channel_count)
+ 			ena_xdp_exchange_program_rx_in_range(adapter,
+ 							     NULL,
+--- a/drivers/net/ethernet/amazon/ena/ena_netdev.h
++++ b/drivers/net/ethernet/amazon/ena/ena_netdev.h
+@@ -153,6 +153,9 @@
+ 	/* Indicate if bufs[0] map the linear data of the skb. */
+ 	u8 map_linear_data;
+ 
++	/* The entry holds an xdp_frame (XDP_TX on a shared regular Tx ring) */
++	u8 is_xdp;
++
+ 	/* Used for detect missing tx packets to limit the number of prints */
+ 	u8 print_once;
+ 	/* Save the last jiffies to detect missing tx packets

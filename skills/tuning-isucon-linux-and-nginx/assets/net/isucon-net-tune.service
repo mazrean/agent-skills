@@ -1,0 +1,12 @@
+[Unit]
+Description=isucon NIC IRQ affinity / qdisc tuning
+After=network-online.target irqbalance.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/isucon-net-tune.sh
+
+[Install]
+WantedBy=multi-user.target

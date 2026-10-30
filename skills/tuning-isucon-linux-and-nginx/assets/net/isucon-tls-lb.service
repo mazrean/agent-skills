@@ -1,0 +1,13 @@
+[Unit]
+Description=isucon TLS load balancing via netfilter DNAT
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=-/etc/isucon/tls-lb.env
+ExecStart=/usr/local/bin/isucon-tls-lb.sh
+
+[Install]
+WantedBy=multi-user.target
