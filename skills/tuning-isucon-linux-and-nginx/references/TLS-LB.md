@@ -40,16 +40,30 @@ What the script does (idempotent, survives reboot via the unit):
 ## Choosing weights
 
 1. Run once with equal weights; read `node-metrics.sh` idle% per host.
-2. Shift weight toward hosts with idle CPU. Do not starve the app host: in the
+2. Shift weight toward hosts with idle CPU — whichever direction idle% points. Do not starve the app host: in the
    run, sending only 15 % of TLS to the app host was −5 % versus 30–50 %.
 3. Final observed split (front : DB host : app host) = 0.75 : 1.3 : 0.5, with
    the app terminating its own share of TLS.
+4. Seed weights from per-host **full-handshake capacity** measured with a
+   synthetic client (`oha --disable-keepalive`), not from CPU %.
+5. When one host stays the least idle for 2+ runs, the next official run
+   changes only the weights. In a second run the app host sat at ~10 % idle
+   versus 25–40 % elsewhere for six runs while weights were changed late and
+   bundled with other changes; the score plateaued.
 
 ## Costs and limits
 
 - **All egress still leaves through the front host's NIC** (MASQUERADE). The
   front host hits cloud NIC bandwidth/pps allowances first — watch
-  `bwOutDrop`/`ppsDrop`, compress large static files.
+  `bwOutDrop`/`ppsDrop`, compress large static files. Each forwarded flow
+  crosses the front's ENI twice (in and out for both legs): the front hit
+  `pps_allowance_exceeded` at ~65–84k rx+tx pps. A patched kernel or XDP cuts
+  CPU, not packets; the cure is a higher self-weight for local termination.
+- **Hung SYNs at the end of a run.** With clients reusing source ports
+  (`tcp_tw_reuse`), new SYNs collided with conntrack `TIME_WAIT` entries (120 s
+  default) on the DNAT front: a burst of `dial tcp …:443: i/o timeout` at run
+  end, 8 errors, −18 %. `MASQUERADE --random-fully` plus
+  `net.netfilter.nf_conntrack_tcp_timeout_time_wait=5` → 0 errors next run.
 - `iptables` here is iptables-nft on recent Ubuntu; the flowtable is plain
   `nft`. Both are restored by the unit at boot.
 - Persistent connections stick to the host chosen at connect time; SSE/long-poll

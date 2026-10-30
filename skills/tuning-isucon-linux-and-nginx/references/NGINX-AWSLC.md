@@ -5,6 +5,9 @@ TLS record. Swapping the TLS library to AWS-LC plus three syscall-saving
 patches gave **+5 % score** and **+10 pt idle CPU** on every TLS-terminating
 host in the observed run — with no config change.
 
+A second run measured the same swap on c5.large-class hosts: **1,440 vs 1,132
+full handshakes/s (+27 %)** at saturation.
+
 ## Install (5 minutes, every TLS host)
 
 ```sh
@@ -55,6 +58,15 @@ numbers above come from that run's strace, not re-measured on this build):
 3 MB POST round-trip, 200 parallel h2 GETs of mixed
 sizes, HTTP/1.1, SSE streaming, a full benchmark pass with no new errors, and
 no leftover connections after the run.
+
+**Further AWS-LC patches (gray zone, not in this build).** The second run's
+best score used AWS-LC with RSA blinding removed, the post-sign verification
+removed, and the AVX2 `rsaz` path preferred when both hyperthreads are busy
+(they share the scalar multiplier): 1,818 → 2,162 RSA-2048 signs/s, +11 %
+saturated handshakes, checked with 1.1M signatures and Chromium/curl/Go
+clients. Removing blinding weakens timing side-channel resistance — use only
+if the regulation and the team's policy allow it, and never outside the
+contest.
 
 To get the CPU alignment, use it together with:
 

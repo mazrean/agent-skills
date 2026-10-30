@@ -79,6 +79,25 @@ sudo ethtool -S "$(ip -o route show default | awk '{print $5}')" | grep allowanc
 Go app: `net/http/pprof` behind an env flag. Rust app: `perf` with
 `debug = 1` in the release profile (`cargo build --release` keeps speed).
 
+## Verifying a hypothesis about latency
+
+- Bucket latency per 5 s **per front host** (`$msec` in the log). A
+  whole-run p99 hid a TLS host that saturated 25 s in and stayed slow.
+- Compare the same upstream endpoint reached through different front hosts:
+  same slowness → app; one front slow → that front.
+- Inspect config effects **per host directly** (`--resolve` to each host's
+  own address), never through the DNAT front: the LB may hand you a host
+  that has not been reloaded yet.
+
+## Normalising CPU when the load adapts
+
+A pseudo-bench whose load grows with app speed makes raw CPU % incomparable
+across builds. Report **CPU ticks per 1,000 points** (or per 1,000 requests of
+a fixed mix) over a fixed window; it went 3.87 → 2.63 over a series of app
+commits that each looked flat in CPU %. On 2-vCPU instances (one core + HT),
+CPU % understates saturation: 53 % CPU already gave 70 % of the maximum
+handshake rate.
+
 ## Pitfalls observed
 
 - A profiling build (debug symbols, perf attached) scores 10–20 % lower — never
@@ -88,3 +107,8 @@ Go app: `net/http/pprof` behind an env flag. Rust app: `perf` with
   `sha1sum` of the deployed binary next to the numbers.
 - A burst-credit window (cloud NIC) produced a +15 % "improvement" that vanished
   on consecutive runs. Run at least two in a row before believing a jump.
+- A pseudo-bench or oracle left on a host that a topology change put into the
+  request path burned 200 % CPU during an official run. Generators live off
+  the request path (or on the local machine through a scoped firewall rule),
+  and they enforce the real client's limits (`ulimit -n 1024`, default port
+  range) so they fail the same way the bench would.

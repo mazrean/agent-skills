@@ -1,7 +1,7 @@
 ---
 name: tuning-isucon-linux-and-nginx
 description: Problem-independent infrastructure tuning for ISUCON-style multi-host web apps on Linux, distilled from a 17-hour measured tuning run (1,085 → ~2.9M). Covers a prebuilt nginx 1.28 + AWS-LC binary with syscall-saving patches (drop-in replacement, no build needed), TLS termination spread across hosts with netfilter DNAT + nftables flowtable, NIC IRQ / XPS / SO_INCOMING_CPU alignment, sysctl, cloud NIC allowance limits (EC2 ENA bw/pps), per-host cost measurement that does not need a benchmark run, transferable app patterns (in-memory + local WAL, long-poll, SSE, Go→Rust), and a prebuilt patched kernel + XDP load balancer that cuts front-host packet CPU (with when it pays), and a list of measured dead ends (XDP on stock ENA, NAPI deferral, NOTRACK). Use when tuning nginx/TLS/kernel/NIC on ISUCON hosts, when the app is no longer the only bottleneck, or when deciding which infra levers are worth contest time.
-version: 1.1.0
+version: 1.2.0
 ---
 
 # Tuning ISUCON Linux and nginx
@@ -37,6 +37,7 @@ which infra work is worth contest time.
 |---|---|---|---|---|
 | 1 | Stop CPU-eating daemons (keep ssh + cloud agent) | 2 min | small, removes noise | [NET-TUNE.md](references/NET-TUNE.md) |
 | 2 | sysctl (backlogs, ports, buffers) + `LimitNOFILE` | 2 min | prevents collapse under load | [NET-TUNE.md](references/NET-TUNE.md) |
+| 2b | Client `keepalive_timeout` from the measured gap CDF (bench fds/ports are finite) | 10 min | wrong values FAILed 2 runs (fd, then port exhaustion on the client) | [NGINX.md](references/NGINX.md#client-idle-timeout-derive-it-do-not-guess) |
 | 3 | nginx: upstream keepalive, `access_log off`, h2, `reuseport`, `worker_cpu_affinity auto`, `open_file_cache`, `gzip_static` | 10 min | large; HTTP/1.1 to the client was −5 % vs h2 | [NGINX.md](references/NGINX.md) |
 | 4 | Co-located nginx→app over a Unix socket; separate DB/app/nginx hosts | 15 min | 3-host split ≈ +10 %; UDS small + | [NGINX.md](references/NGINX.md) |
 | 5 | **Prebuilt nginx + AWS-LC** (drop-in via systemd override) | 5 min | +5 % score; TLS hosts +10 pt idle CPU | [NGINX-AWSLC.md](references/NGINX-AWSLC.md) |
@@ -61,6 +62,9 @@ which infra work is worth contest time.
 | HTTP/1.1 instead of h2 to the client | −5 % |
 | Go app terminating TLS itself (crypto/tls) | −10 % (Rust + rustls/aws-lc-rs was +4 %) |
 | `Cache-Control: max-age` on static files | workload-dependent: −35 % in one phase, + later — always A/B |
+| Home-made TLS edge proxy replacing nginx | −4 % handshakes/s; 0-point run from h2-cancel bugs before it was dropped |
+| Read-local replica cluster across the TLS hosts | −8 %: replication CPU competes with TLS |
+| TLS session cache/ticket tuning when the client never resumes | no effect — check `$ssl_session_reused` first |
 
 Details and numbers: [DEAD-ENDS.md](references/DEAD-ENDS.md).
 

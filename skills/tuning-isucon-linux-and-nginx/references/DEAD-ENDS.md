@@ -35,6 +35,18 @@ requires `2 × queues ≤ max_num_io_queues` → with 2 queues it forces **1 que
 | `no-store` on all static files | −20 % (614k) |
 | 304 revalidation for assets | worse (887k/866k vs ~915k) |
 
+## Second run (TLS-heavy app, 3 hosts, 30-min queue)
+
+| Change | Result |
+|---|---|
+| Home-made Rust TLS edge proxy (rustls + aws-lc-rs) in place of nginx | 4 % fewer handshakes/s than nginx + AWS-LC; first official run 0 points (truncated bodies on h2 cancels, OOM), retry 1.46M vs 1.66M best — abandoned |
+| Handshake-priority split in that edge | sequential-loop latency 14.9 → 0.21 ms, no visible score gain |
+| Read-local replica cluster (writes forwarded to a primary) | 1.53M vs 1.66M (−8 %): replication + forwarding CPU landed on the TLS hosts |
+| TLS session cache / ticket variants | no effect: the client never resumed sessions (check `$ssl_session_reused` first) |
+| `ssl_session_tickets off` under TLS 1.3 with AWS-LC | still sends tickets (TLS 1.2: 0); tickets ride the response packet, < 1 % |
+| `-march=<host cpu>` rebuild of the TLS library | 0 |
+| X25519 key reuse | 0.7 % of the profile, skipped |
+
 ## App
 
 | Change | Result |

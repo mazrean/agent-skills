@@ -25,7 +25,7 @@ http {
     tcp_nopush on;
     tcp_nodelay on;
     server_tokens off;
-    keepalive_timeout 65;
+    keepalive_timeout 65;          # derive from the client gap CDF, see below
     keepalive_requests 100000;
     include /etc/nginx/mime.types;
     default_type application/octet-stream;
@@ -46,6 +46,25 @@ http {
     include /etc/nginx/sites-enabled/*;
 }
 ```
+
+## Client idle timeout: derive it, do not guess
+
+The benchmark client's fds (often 1024) and ephemeral ports (~28k) are
+finite, and the bench host is not yours. Open client connections ≈
+new-connection rate × `keepalive_timeout`. Observed with a fast in-memory app:
+
+| `keepalive_timeout` | Result |
+|---|---|
+| 75 s (default-ish) | bench died: `socket: too many open files` → FAIL |
+| 2 s (+ `http2_idle_timeout 1s`) | handshake storm, TLS hosts saturated, p50 1 s |
+| 30 s | bench died: `connect: cannot assign requested address` → FAIL |
+| **5 s** | pass; 98.9 % of same-client gaps were ≤ 5 s |
+
+Log `$msec`, `$connection`, `$ssl_session_reused` and a per-client key
+(session cookie / auth subject) in LTSV, compute the per-client
+inter-request gap CDF from one run, and set the timeout just above its knee.
+The same log also shows whether the client ever resumes TLS sessions (if
+not, session cache/ticket tuning is worthless).
 
 ## Upstream: keep connections alive
 
