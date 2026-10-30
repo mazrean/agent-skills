@@ -4,7 +4,11 @@ The two largest observed losses — a blocking question that waited 48 min
 for an absent human (B8), and the driver declaring victory and ending its
 turn with hours left, twice, the second time *after* the user re-prompted
 "push past the limit" (B10) — were not fixed by prose. Enforce them in the
-Claude Code harness of the contest session, before minute 0.
+Claude Code harness of the contest session, before minute 0 — **installed by
+the human**. Under auto mode the agent's own write to `.claude/settings.json`
+is denied as `[Self-Modification]`; in the second observed run the agent hit
+that denial at minute 9, carried on without a hook, and lost ~2 h to turn
+ends (OBSERVED-BARRIERS B16).
 
 ## Project `.claude/settings.json` for the contest repo
 
@@ -74,10 +78,23 @@ Notes:
 - Pair it with a supervisor or the Notification hook: the hook keeps the
   agent busy, it does not make the work good.
 
+## Pre-approving the plan's risky steps
+
+The auto-mode classifier enforces its own rules; in the observed runs it
+denied, among others: `[Self-Modification]` (editing the session's own
+settings), `[Production Reads]` (inspecting the bench host),
+`[Code from External]` (downloading a tool), `[Remote Shell Writes]` (a
+subagent running host-writing scripts), `[Security Weaken]` (trusting a test
+signing key in production). Anything the plan needs goes into `allow` as an
+exact script path, or is planned for the driver; an approval relayed by
+another session does not count.
+
 ## Session start checklist
 
 1. `NOTES.md` has `END:`, the gray-zone policy answers, and a backlog.
-2. `.claude/settings.json` above is in place; restart the session so it loads.
+2. **The human** has put `.claude/settings.json` above in place and restarted
+   the session so it loads. The agent verifies by reading the settings
+   file and, if anything is missing, notifies the human instead of writing it.
 3. Send a test notification (`echo '{}' | <your notify command>`) and
    confirm it arrives.
 4. Run `echo '{"cwd":"'$PWD'"}' | scripts/contest-stop-hook.sh` — it must

@@ -17,6 +17,18 @@ The environment stays locked while an official job waits in the portal queue
 (the deployed state must not change under the benchmark), so enqueue only
 when a batch is ready and let subagents do non-environment work meanwhile.
 
+With a long queue (30 min was emulated in the second run) that rule freezes
+the environment for most of the day. The amendment that worked, if the portal
+allows a pending job: keep one job pending; the lock protects the **candidate
+state**, and only the driver redeploys it, each redeploy preflighted (shadow
+stack check + short load) so whatever is live when the job starts is
+coherent; record the deployed state when the portal status flips to running,
+not at enqueue; other agents' `env-run.sh` is forbidden while a job is pending
+unless the portal exposes an ETA with ample margin. The candidate was the
+unsoaked proxy in the one 0-point run of that day — preflight is the part that
+cannot be skipped. A practice emulator must mirror the real portal (usually one
+job per team, no exact start time), or this habit will not transfer.
+
 ## `scripts/env-run.sh`
 
 ```bash
@@ -78,7 +90,7 @@ parse_result() { # stdin: bench output -> "score<TAB>pass<TAB>errors" (adapt to 
 commit=$(git rev-parse --short HEAD)
 out="$LOG_DIR/official-$(date +%H%M%S)-$commit.log"
 
-exec 9>"$LOCK"; flock 9
+exec 9>"$LOCK"; flock 9   # background children (watchdogs, sleepers) must exec 9>&- or they hold the lock
 echo "$(date +%T) $commit OFFICIAL $NOTE" >| "$LOCK.owner"
 $DEPLOY_CMD >"$out.deploy" 2>&1 || { echo "deploy failed: $out.deploy" >&2; exit 4; }
 $METRICS start || true
@@ -119,10 +131,17 @@ Contest constraints (hard rules):
 - You own: files [paths]; host-level areas [e.g. nginx on isu1]. Read anything.
 - Use the environment only via scripts/env-run.sh "<note>" <command> (it deploys
   YOUR commit inside the lock). One run per call, never a whole sweep. Exit 75
-  means busy: do read-only work (code reading, profile analysis, preparing the
+  means busy (print that, never fail silently): do read-only work (code reading, profile analysis, preparing the
   next change) and retry later. Never deploy outside it.
 - Anything you change on a host outside the deploy script must be undone by a
   trap before the lock is released.
+- Load generators and oracles never run on a host that serves the bench
+  (re-check after any topology change). Scratch state goes in your own
+  mktemp -d, never a shared scratchpad path. New listeners: check the port
+  registry in NOTES.md and ss -ltnp first.
+- Before hand-off: git status clean (no untracked source files).
+- Anything you add to NOTES.md is written in Japanese (commands and
+  identifiers as-is).
 - First report within 10 minutes: what your first measurement exposed
   (per-host idle%, connection churn, allowance drops) and the cheapest next
   step. Deep work (kernel, XDP, rewrites) only after that, time-boxed.

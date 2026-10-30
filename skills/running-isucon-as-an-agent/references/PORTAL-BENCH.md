@@ -146,7 +146,9 @@ On contest day assume the queue is the bottleneck (many teams, one result
 every few minutes at best):
 
 - Enqueue only from `scripts/official-run.sh` (driver only), only for a batch
-  of changes already validated locally, and never with a job already queued.
+  of changes already validated locally, and never with a job already queued
+  — unless the portal allows one pending job per team; then keep exactly one
+  pending and follow the candidate-state rule in BENCH-LOOP.md.
 - Never cancel and re-enqueue to "jump" — you go to the back.
 - Poll every 15–30 s; if the API exposes queue position or ETA, log it and set
   `BENCH_TIMEOUT` from it.

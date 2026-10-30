@@ -12,6 +12,16 @@ rewrite fails `pass=false` (T+29) → 288,237 (T+30) → 3-host split 325,960
 reproducible over 4 consecutive runs (T+5h, the driver's own final report).
 Speed was not the problem; the items below were.
 
+Second source (entries A8, B16–B21, and the "Run 2" notes): an 8-hour
+contest-mode rehearsal of another past problem on 3 hosts + bench, with a
+30-minute emulated bench queue, a pseudo-bench/oracle built in the first
+hour, four to six worktree-isolated subagents, and a separate supervisor
+session. Times are wall-clock offsets. Trajectory: baseline 2,617 → FAIL
+(bench client fds) → 181,233 → FAIL (bench client ports) → 1,158,467 →
+1,613,234 → 0 (unsoaked custom proxy) → **1,656,610** best at T+3h20 →
+every later run lower (1.27–1.50M) → 1,495,206 after the final full reboot.
+Losses: ~2 h of idle turn ends, 3 of ~14 official slots spent on FAILs.
+
 Each entry: **pattern → impact → detection (for a supervisor) → fix**.
 
 ## A. Practice-only affordances (contest-day blockers)
@@ -105,6 +115,39 @@ Each entry: **pattern → impact → detection (for a supervisor) → fix**.
   lines that count; it pins the official binary path. Anything else is
   labelled `UNOFFICIAL` and never enters `SCORES.tsv`.
 
+### A8. Bench-client limits "fixed" on the bench host (Run 2)
+- **Pattern (T+1h):** the first in-memory build was fast enough that the
+  bench's adaptive scenario grew to ~580 workers in ~2 s and the bench
+  process itself died: `dial tcp: socket: too many open files` → FAIL. The
+  driver cut nginx `keepalive_timeout` 75 → 2 s; that turned into a
+  handshake storm and saturated TLS (p50 1 s, players left). Raised to 30 s,
+  the next run FAILed on `connect: cannot assign requested address`
+  (bench ephemeral ports held by idle keepalive connections). Both FAILs
+  were "solved" only by the human allowing `nofile` and
+  `ip_local_port_range`/`tcp_tw_reuse` changes on the bench host.
+- **Impact:** 2 of the first 4 official slots (~1 h of feedback at a
+  30-min queue), four keepalive values tried by guess. On contest day the
+  bench host is not yours — the same app would have been stuck at FAIL.
+- **Root cause:** the load generator's fds and ports are finite; nobody
+  modelled them, and the pseudo-bench ran without those limits.
+- **Detect:** bench-side errors that are socket/dial errors from the
+  client (`too many open files`, `cannot assign requested address`,
+  dial timeouts) rather than HTTP status/validation errors; a FAIL right
+  after a large speed-up.
+- **Fix (server side only):**
+  - estimate open client connections ≈ new-connection rate × server idle
+    timeout; keep it well under ~1k fds and ~28k ports;
+  - choose idle timeouts from the measured per-client inter-request gap CDF
+    (log `$msec` + a session/cookie key; here 98.9 % of gaps were ≤ 5 s →
+    `keepalive_timeout 5s` worked), never by guess;
+  - if the manual allows rate limiting (e.g. 429 + `Retry-After` on
+    creation endpoints), ship it behind a flag as a kill switch;
+  - make the pseudo-bench enforce `ulimit -n 1024` and the default port
+    range so it fails the same way first.
+  - A DNAT front + clients reusing source ports later produced hung SYNs
+    (`i/o timeout` burst at run end, −18 %): see
+    `tuning-isucon-linux-and-nginx`/TLS-LB "Costs and limits".
+
 ## B. Process hygiene
 
 ### B1. Interactive prompt hang
@@ -120,6 +163,15 @@ Each entry: **pattern → impact → detection (for a supervisor) → fix**.
   `rm -i` alias and hung until the 200 s tool timeout. Ten hours in, the
   agent still had not adapted to the shell it was given — the alias check
   has to be a startup step, not a lesson learned.
+- **Run 2:** the skill (with this rule) was loaded at T+0, yet the alias
+  check ran only after a `cp -i` hang at T+9 min. zsh then added new traps:
+  `exec 9>lock` failed under `noclobber` mid-chain, so one host was deployed
+  and the other two silently skipped (a partial deploy); an unquoted `$R`
+  holding several curl options was not word-split (`option unknown`);
+  `nomatch` errors spammed polling loops; pre-existing `~/.ssh/config`
+  `Host` patterns shadowed the new per-contest aliases (timeouts).
+  Run the check as the literal first command, write scripts as bash files
+  (not inline zsh), use `9>>lock`, and verify aliases with `ssh -G <alias>`.
 - **Impact:** ~5 min at T+2, before the baseline existed; ~3.5 min again
   at T+10.5h.
 - **Detect:** a foreground command exceeding its timeout with no output;
@@ -164,7 +216,16 @@ Each entry: **pattern → impact → detection (for a supervisor) → fix**.
   driver deploys from; a bench run whose deployed build/commit differs from
   the one the agent believes it is testing.; any file under `/etc` on a host that is not produced by
   the deploy script.
-- **Fix:** worktree isolation, no-amend rule, `flock` around deploy+bench.
+- **Run 2 variants:** worktrees do not isolate the session scratchpad — a
+  subagent's `rm -rf <scratchpad>/wal` deleted another agent's live WAL; a
+  subagent handed back with a new file untracked, so merged `main` did not
+  build; a replication listener defaulted to a port an auth sidecar (needed
+  by the post-contest browser check) already used — caught by the
+  supervisor; a leftover test unit still held the port the preflight needed.
+- **Fix:** worktree isolation, no-amend rule, `flock` around deploy+bench;
+  per-agent `mktemp -d` for scratch state; `git status` clean before
+  hand-off and the driver builds after every merge; a port registry in
+  `NOTES.md` and `ss -ltnp` on every host before adding a listener.
 
 ### B4. Single-run decisions
 - **Pattern:** identical-code runs ranged 259k–326k (±12 %). The agent did
@@ -229,8 +290,16 @@ Each entry: **pattern → impact → detection (for a supervisor) → fix**.
   until a human read the report. Risky steps that the contest plan
   depends on (custom kernel boots, cloud-API reboots) need to be
   pre-approved before minute 0, or they will stall mid-experiment.
+- **Run 2 variant:** host-writing steps planned for a subagent were denied
+  (`[Remote Shell Writes]`); bench-host inspection was denied
+  (`[Production Reads]`); fetching a tool from the internet was denied
+  (`[Code from External]`). Plan host writes for the driver or pre-allow the
+  exact scripts. Approvals relayed by another session are not consent — see
+  B20.
 - **Detect:** poll the session's status (`ListAgents`, or the session state
-  file's `status` / `waitingFor`) — not transcript growth alone.
+  file's `status` / `waitingFor`) — not transcript growth alone. Status
+  alone is also unreliable: a session with a background task shows `shell`
+  even after its turn ended (B16; SUPERVISING.md).
 - **Fix:** deny `AskUserQuestion` in the contest session (HARNESS-SETUP.md).
   Risk appetite is part of the pre-agreed policy (SKILL.md §0).
   During the contest, judgment calls are **non-blocking**: pick the
@@ -284,6 +353,8 @@ Each entry: **pattern → impact → detection (for a supervisor) → fix**.
   the tested `Stop` hook in HARNESS-SETUP.md, which re-prompts "take the
   next backlog item" until the `END:` time — so an accidental turn end
   costs seconds, not hours.
+- **Run 2:** the hook could not be installed by the agent at all, and
+  "waiting for the result" became the dominant stop trigger — see B16.
 
 ### B11. Time-dependent limits mistaken for regressions
 - **Pattern (T+~4.5h):** after a reboot test, scores fell from ~94万 to
@@ -378,13 +449,119 @@ Each entry: **pattern → impact → detection (for a supervisor) → fix**.
   connection churn, retransmits, allowance counters) and reports those
   first; deep dives (custom kernels, XDP, rewrites) only after the cheap
   list is exhausted, with a time box.
+- **Run 2 (cheap lever visible for 6+ runs, still lost):** after the best
+  run (T+3h20) every official run scored lower. In every run the app host
+  (which also terminated a share of TLS) sat at ~10 % idle while the other
+  two hosts had 25–40 %. TLS weights were changed late and always bundled
+  with another change, while slots went to big bets (replica cluster,
+  custom proxy, crypto patches). The "final layout" was never A/B'd
+  against the best run's commit.
+- **Fix (Run 2):** when per-host idle is lopsided for 2+ runs, the next
+  slot changes **only** the rebalancing; when every run after the best is
+  lower, re-run the best commit once before declaring a final layout.
+
+### B16. Harness not installable; turn ended with nothing to wake it (Run 2)
+- **Pattern:** at T+9 min the driver tried to write the HARNESS-SETUP
+  allow-list and `Stop` hook into the contest repo's `.claude/settings.json`;
+  the auto-mode classifier denied it as `[Self-Modification]`. The driver
+  mentioned it once and carried on without a hook. It then repeatedly ended
+  turns with "waiting for the result": the human typed some form of "keep
+  thinking while you wait" 8 times. Two turn ends were costly:
+  - "run N: waiting for result" → the run FAILed and a host hung; nobody
+    noticed for ~8 min, until a subagent's message happened to wake the
+    driver.
+  - "from here on, repeat runs without changing the layout" → **71 min**
+    with no transcript record, bench queue empty, ~2.5 h left, until the
+    human typed.
+- **Why the wake-up never came:** the enqueue was detached
+  (`run_in_background` around `cmd & sleep 2`, or `( … &)`); the tool task
+  exits immediately, so no completion notification ever arrives.
+- **Impact:** ~2 h of idle driver in total (71 + 16 + 12 + 12 + 8 min) — the largest loss of the run.
+- **Detect:** last transcript record is the turn-end system record, no
+  later user message, no live background task or Monitor that will report,
+  queue empty, time remaining. `ListAgents` showed `shell` (a background
+  task existed) and fooled the supervisor (SUPERVISING.md).
+- **Fix:** the **human** installs settings and hooks before starting the
+  session; at minute 0 the agent only verifies them and notifies if absent
+  (HARNESS-SETUP.md). Rule: never end a turn unless something will wake
+  you — the official run is a live `run_in_background` task (not
+  detached) or a Monitor is armed on the next result — and the backlog in
+  `NOTES.md` is empty of non-bench items.
+
+### B17. Home-made replacement of a mature component reached an official slot unsoaked (Run 2)
+- **Pattern:** a subagent built a custom TLS edge proxy to replace nginx.
+  Its own verdict: proxy mode "not worth it" (missed the ≥10 % adoption
+  threshold, 4 % more CPU per handshake). The driver deployed it anyway for
+  a side feature whose score effect was inferred from a latency
+  micro-benchmark, and the switch ran unattended right after the previous
+  result. Official run: **0 points** (67 errors: truncated bodies,
+  `unexpected EOF`), proxy RSS 2.3 GB → OOM, one host unreachable for
+  6 min until a cloud-API reboot. After a 45-min fix, the retry still ended
+  with 5 decode errors and 1.9 GB RSS; abandoned.
+- **Why tests missed it:** validation was 20-second pseudo-bench loads with
+  no client cancellations (h2 `RST_STREAM`), few idle connections, and less
+  than bench concurrency. The bugs were exactly there: an in-flight counter
+  not decremented on cancel, and closing without lingering so an RST
+  discarded the tail of a response.
+- **Impact:** 2 of ~14 official slots, a 0-score run, a host outage, ~2
+  agent-hours.
+- **Fix:** respect the adoption threshold the agent set. A replacement for
+  nginx / a proxy / a runtime must pass a **soak gate** before any official
+  slot: duration ≥ one bench run, concurrency ≥ the bench's, ~2 % client
+  cancellations, long idle connections, RSS flat. Build the shadow-stack
+  preflight and an auto-revert guard ("after run N: revert on any error")
+  **before** the first risky swap, not after the failure.
+
+### B18. Test load on a host that serves the bench (Run 2)
+- **Pattern:** the pseudo-bench and oracle containers lived on the third
+  host. A topology change put that host into the TLS-termination path; the
+  next official run had the pseudo-bench burning 200 % CPU on it (seen
+  only afterwards: that host slow 5–25 s). The lock was added after the
+  fact; the human then ordered load generation moved to the local machine
+  via a security-group rule scoped to the local IP. Locally, `ulimit -n
+  1024` and the home router's NAT dropped SYNs until workers were capped.
+  The scoped rule was later found still open by the supervisor.
+- **Fix:** every topology change re-checks which hosts serve traffic and
+  evicts test workloads from them. Generators and oracles live off the
+  request path; if every host serves, run them from the local machine
+  through a scoped firewall rule that is logged in `NOTES.md` for cleanup,
+  with `ulimit -n` raised and a connection cap.
+
+### B19. Deploy defaults silently undid tuning (Run 2)
+- **Pattern:** the deploy Makefile had `NET_TUNE ?= off`, so every partial
+  redeploy (nginx only) turned IRQ pinning off on two hosts. Found ~1.5 h
+  later. The per-run deployed-state record listed some flags but not this
+  one, so the affected official runs could not be identified. Separately,
+  an app-only deploy printed `tls_lb=0` — flag metadata, not host state.
+- **Fix:** defaults equal the current best configuration; experiments are
+  explicit flags. The deployed-state record is read **from the hosts**
+  (live units, sysctl, iptables, binary hashes), covering every toggle.
+
+### B20. Approvals relayed by another session (Run 2)
+- **Pattern:** the human told the supervisor session it could pass
+  messages to the driver. It relayed the human's conditional approval to
+  trust a test signing key in production; the driver's classifier denied
+  the action (`[Security Weaken]`) because the human had not typed it in
+  that session. The driver correctly withdrew and used a shadow stack on
+  alternate ports instead.
+- **Fix:** gray-zone or security-relevant approvals are typed by the human
+  in the driver session, or recorded in `NOTES.md` policy before start. A
+  supervisor relays facts, never consent.
+
+### B21. Aggregate metrics hid the cause (Run 2)
+- **Pattern:** the driver explained "ranking > 1 s" as "the app steals CPU
+  from nginx". Asked to verify, it bucketed latency per 5 s per front host:
+  everything was fine for 25 s, then slow everywhere — whole-host CPU
+  saturation on the TLS terminator; a whole-run p99 of 48 ms on another
+  endpoint had hidden it. Separately, a TLS session-ticket check made
+  *through* the DNAT front reached a host not yet reloaded and put a wrong
+  conclusion into `NOTES.md`.
+- **Fix:** verify hypotheses with time-bucketed percentiles per front host;
+  compare the same upstream reached through different fronts to separate
+  front from app. Verify config per host directly, never through the LB.
 
 ## C. Supervising a running session
 
-When watching another agent session (e.g. tailing its transcript JSONL),
-alert only on: session status `idle` before the deadline (B10), `waiting` / `input needed` (B8 — check the
-status itself, transcript silence alone misses it), practice-only affordance use (A*), amend/reset/force-push,
-reboot of more than one host, stopping ssh/cloud agents, `pass=false`
-without a revert within one run, no transcript growth for 5+ min while
-busy. Read-only exploration and in-repo edits are noise — reporting them
-trained the user to ignore the supervisor within minutes.
+Moved to [SUPERVISING.md](SUPERVISING.md): what to watch, which alert rules
+paid off and which were noise in two observed runs, reliable stall
+detection, external health probes, and relaying facts (not consent).
