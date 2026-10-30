@@ -46,6 +46,9 @@ dependencies:
 - `winning-web-speed-hackathon`, `checking-wsh-vrt`, `planning-wsh-improvements`,
   `sharing-sockets-with-so-reuseport-in-zig`, `writing-zig-cli-tools` — domain
   references.
+- `running-isucon-as-an-agent` (contest-day operating manual for agents) and
+  `tuning-isucon-linux-and-nginx` (transferable infra levers; its prebuilt
+  nginx binary is published as a GitHub Release, not committed) — ISUCON.
 
 ## Conventions
 
