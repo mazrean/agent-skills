@@ -22,6 +22,12 @@ embed every fact it needs.
   (`ssh`, `mysql -e DDL`, `systemctl reload nginx`) DO collide — by
   design, the DAG ensures only one such task runs per round, but be
   aware that your `Verify` block runs against shared remote state.
+- Worktrees do not isolate anything outside the repo: scratch state goes in
+  the subagent's own `mktemp -d` (a shared scratchpad path once let one
+  agent `rm -rf` another's live data), load generators never run on a host
+  that serves traffic, and `git status` must be clean (no untracked source
+  files) before returning. The full contest-day preamble is in
+  `running-isucon-as-an-agent`/BENCH-LOOP.md.
 
 ## File location
 
