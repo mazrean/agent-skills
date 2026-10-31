@@ -1,7 +1,7 @@
 ---
 name: running-isucon-as-an-agent
-description: Contest-day operating manual for an LLM agent (alone or with subagents) that must post a valid ISUCON score within the 8-hour window when the benchmark is triggered only from a browser portal, the bench queue is congested, and the benchmarker itself is fast (but its fds and ports are finite). Covers harness setup that makes stalls impossible (no blocking questions, Stop hook until the deadline, notifications, pre-approved risky steps), turning the portal into a scriptable bench command, spending scarce bench runs on batches decided by per-host measurements, shell traps, parallel agents isolated by worktree and a deploy+measure lock, host-state ownership, recurring validation errors, reboot safety, and the endgame. Distilled from supervising a 17-hour agent run and an 8-hour contest-mode rehearsal with an emulated 30-minute queue. Use before an agent runs an ISUCON contest or rehearsal, when writing ISUCON subagent prompts, or when supervising such a session.
-version: 3.2.0
+description: Contest-day operating manual for an LLM agent (alone or with subagents) that must post a valid ISUCON score in 8 hours when the benchmark runs only from a browser portal. Covers a stall-proof harness (no blocking questions, Stop hook, notifications), a scriptable portal bench, spending scarce runs on measured batches, parallel agents isolated by worktree and a deploy lock, host-state ownership, reboot safety and the endgame, plus the strategy loop that picks what to build next (per-host capacity ledger, latency + capacity rating of designs, seesaw rule, rejection and velocity logs, capped big bets). Distilled from a 17-hour supervised run, an 8-hour contest-mode rehearsal and a real 8-hour multi-region contest. Use before an agent runs an ISUCON contest or rehearsal, when writing ISUCON subagent prompts, or when supervising such a session.
+version: 3.3.0
 ---
 
 # Running ISUCON as an Agent
@@ -11,7 +11,9 @@ the transferable infra levers. This skill covers *how an agent runs the
 contest* without wasting the 8 hours. It was distilled from supervising a
 Claude Code session with up to four subagents for 17 hours (1,085 → ~2.9M),
 then checked against an 8-hour contest-mode rehearsal (2,617 → 1,656,610,
-with a pseudo-bench, a 30-minute emulated queue and a supervisor session).
+with a pseudo-bench, a 30-minute emulated queue and a supervisor session),
+then a real contest (3,023 → 198,146 final, pass, about a third of the
+winner; 4 hosts in emulated regions, ~20 parallel subagents).
 Raw speed was never the problem. What cost the most:
 
 | Loss | Cause | Fix |
@@ -30,6 +32,10 @@ Raw speed was never the problem. What cost the most:
 | 1 slot | pseudo-bench left on a host that a topology change put on the request path | §4 |
 | unknown slots | deploy default turned a tuning off on every partial redeploy | §4 |
 | last ~3 h flat | lopsided per-host idle visible for 6+ runs; slots went to big bets instead | §2, §6 |
+| last ~2 h flat, rank 8 → 39 (Run 3) | same lopsided-host rule, already in this skill, never enforced: the metrics script was never called by the bench wrapper | §2, §7 |
+| the winning topology (Run 3) | rejected on a latency-only rating with a wrong capacity premise and an "8–12 h" estimate; similar features took 10–40 min to code | §7 |
+| the best late gain (+15k) arrived ~2 h late (Run 3) | rejected twice on single runs inside a ±5–10 % band | §2, §7 |
+| ~85 min, 17 FAILs (Run 3) | unbounded disk cache (3), DB OOM (1), the same FAIL type 4× on one feature | §2, §5 |
 
 ## Contest-day assumptions
 
@@ -75,6 +81,13 @@ At minute 0 the agent only verifies they are loaded and notifies if not.
   change client behaviour — allowed?
 - risk appetite: maximise even if a run occasionally fails, or stay safe?
 - spend limits; what always requires a stop-and-ask.
+- how many **big bets** (topology, persistence, language port) may run at
+  once, and who may move the freeze time. Run 3 had ~6 big bets, one landed,
+  and the freeze moved 4 times.
+- alert policy: "only the final run matters" (mid-contest FAILs are fine)
+  or "keep a pass on the board"? It changes what a supervisor toasts.
+- outward actions (portal questions, organizer contact) always go through
+  the human; no agent sends them.
 - every technique must serve **any external client** identically (the
   post-contest browser check comes from the internet): no bench-source-IP-only
   paths such as DSR.
@@ -138,13 +151,20 @@ Rehearse at least one full practice in contest mode.
 - **Every official run is fully instrumented**: deployed commit + binary hash,
   per-host counters (`node-metrics.sh start` before enqueue, `stop` after the
   result), `CODE=` counts. One run should answer several questions.
+  **The wrapper enforces it**: per-host idle is a required score-log column
+  (BENCH-LOOP). In Run 3 this rule existed only as prose. The script was in
+  the repo and never called, and two pegged hosts next to two idle ones went
+  unseen for 5 hours (B22).
 - **Never wait idle on the queue.** While a job is queued, the driver works the
   non-bench backlog. Waiting is a Monitor/background poll, not a foreground loop.
-- **Noise.** Identical code varied ±5–12 %. With few runs, trust per-host
+- **Noise.** Identical code varied ±5–12 %. Adopt or reject only when the
+  delta exceeds the band or two runs agree (STRATEGY-LOOP §7). With few runs, trust per-host
   counters from the same run more than the score delta; believe a jump only
   after it repeats. A score that decays over consecutive runs on unchanged code
   is a resource budget running out (cloud NIC allowance, CPU credits), not a
   regression.
+- **Every cache has a size cap; every run row has min `MemAvailable` and `df`.**
+  On an intermittent 5xx, check disk and memory before bisecting code (B29, B30).
 - **Correctness first.** Any `CODE=` seen in ≥2 runs is a tracked bug assigned
   now; a pass with errors is a latent fail. One code recurred in most runs for
   15 hours and grew with load.
@@ -201,22 +221,66 @@ Preamble to paste into every subagent prompt: [BENCH-LOOP.md](references/BENCH-L
 ## 6. Endgame
 
 - Big-bang changes (language port, persistence redesign) start before T−3h or not at all,
-  behind a flag that A/Bs against the current app.
+  behind a flag that A/Bs against the current app. At most two at once (STRATEGY-LOOP §9).
+- Decide the final procedure by T−3h and write it in `NOTES.md`: the freeze time, a stop
+  rule ("final run passes and scores ≥ X → stop; otherwise one more before T−10"), and a
+  tagged fallback commit that stays deployable. Final = the **last** run, so never queue a
+  run you are not willing to submit.
 - T−90 min: freeze features; subagents get a hard deadline to land or revert.
 - If every run after the best is lower, re-run the best commit once before declaring a
   "final layout"; the final layout must be A/B'd against it.
-- Then: verify on every host that no experiment state remains; full reboot test of all hosts;
+- Then: verify on every host that no experiment state remains (a read-only `final-check.sh`:
+  pending restarts, replication slots, temporary FW rules, disk, profilers off); full reboot
+  test of all hosts at once, then compare row counts and an image/file-store hash with a
+  pre-reboot snapshot;
   browser/E2E checks (they create data) **before** the final runs; official runs on the exact
   commit you will submit; logs/profilers off; close temporary firewall rules.
 - Report via notes/notifications; the `Stop` hook keeps the session alive until `END:`.
+
+## 7. Strategy loop: what to build next
+
+The bench loop says whether a change won. The strategy loop picks the next
+change. Run 3 implemented quickly and lost on this loop. Details and evidence:
+[STRATEGY-LOOP.md](references/STRATEGY-LOOP.md).
+
+- **Capacity ledger** per run (idle % and busiest process per host). If hosts
+  are lopsided for 2 runs, move work onto the idle host.
+- **Rate design options on latency *and* capacity.** Check each capacity premise
+  against the ledger.
+- **Seesaw rule:** two results where a priority knob moves score from one class
+  to another → stop tuning knobs and change the topology.
+- **Rejection log** with premises and an "overturned if" line. Re-open the option
+  when a premise falls.
+- **Velocity log** (dispatched → first commit → tests → first run → decided).
+  Estimate by analog and estimate the delta, not the whole. Code took 10–40 min
+  and convergence 1.5–4 h. An estimate never vetoes alone: build a 30-min
+  flag-off spike and give it one run.
+- **Staged plans:** stage 1 gets an official run before the plan is filed.
+- **Hours 1–2:** fit a score model from the bench log (count vs quality per
+  unit) and measure data locality from the seed data.
+- **One subagent owns capacity/topology** and re-reads the rejection log hourly.
+
+## What held (keep doing)
+
+Run 3's final run had 0 errors and passed reboot, E2E and browser checks.
+These practices produced that (OBSERVED-BARRIERS §D):
+- every experiment behind a flag, default off; the bare deploy is the best config;
+- a differential oracle (DB path vs memory paths over a long write sequence)
+  for any replicated or in-memory model;
+- withdrawing within ~35 min when a measurement refutes a design;
+- attributing errors with per-host logs before chasing them (an off-host 503
+  was left alone);
+- every run recorded in `NOTES.md`, which made the post-mortem possible.
 
 ## References
 
 - [HARNESS-SETUP.md](references/HARNESS-SETUP.md) — settings, `Stop` hook (`scripts/contest-stop-hook.sh`), notifications.
 - [PORTAL-BENCH.md](references/PORTAL-BENCH.md) — browser-only portal → `scripts/portal-bench.sh`; congested-queue etiquette.
 - [BENCH-LOOP.md](references/BENCH-LOOP.md) — environment lock, official-run wrapper, score log, subagent preamble.
-- [OBSERVED-BARRIERS.md](references/OBSERVED-BARRIERS.md) — evidence for every rule above, with timings, from two runs.
+- [OBSERVED-BARRIERS.md](references/OBSERVED-BARRIERS.md) — evidence for every rule above, with timings, from three runs, plus what held.
 - [PSEUDO-BENCH.md](references/PSEUDO-BENCH.md) — oracle-differential checker, calibrated load generator, shadow-stack preflight, queue emulator, browser check.
-- [SUPERVISING.md](references/SUPERVISING.md) — watching a contest agent from a second session: alert rules that paid off vs noise, stall detection, health probes.
+- [SUPERVISING.md](references/SUPERVISING.md) — watching a contest agent from a second session: alert rules that paid off vs noise, stall detection, health probes, strategic review.
+- [STRATEGY-LOOP.md](references/STRATEGY-LOOP.md) — capacity ledger, two-axis option rating, seesaw rule, rejection and velocity logs, replicates, big-bet caps.
 - `tuning-isucon-linux-and-nginx` — transferable nginx/TLS/kernel/NIC levers, prebuilt nginx, measurement without the bench.
 - `winning-isucon` — contest strategy; `writing-isucon-arch-subagent-tasks` — worktree-isolated dispatch.
+- `designing-isucon-architecture` — topology options, including the multi-region block (region-local commit, audience-based replication).

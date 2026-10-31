@@ -22,6 +22,19 @@ session. Times are wall-clock offsets. Trajectory: baseline 2,617 → FAIL
 every later run lower (1.27–1.50M) → 1,495,206 after the final full reboot.
 Losses: ~2 h of idle turn ends, 3 of ~14 official slots spent on FAILs.
 
+Third source (entries B22–B30 and section D, "Run 3"): a **real 8-hour
+contest**, not a rehearsal. Four hosts with 2 vCPU each. Three app hosts in
+emulated regions, all inter-host traffic through a router that adds ~100 ms
+RTT and caps bandwidth. One shared DB host in the home region. Cross-region
+read-your-writes was mandatory. The score came from simulated users whose
+count compounded daily. One driver with up to ~20 parallel worktree subagents
+(184 spawned), a supervisor session and a strategist session. Portal bench,
+almost no queue. Trajectory: 3,023 → 16,875 (T+44 min) → 112k, rank 9
+(T+2h26) → 146k (T+3h34) → **199,880** best at T+6h13 → no new best in the
+~25 runs after → 198,146 final (pass, 0 errors), rank ~39 of the frozen
+board. The leader had 506k at T+1h22 and 629k at the end. 119 official runs,
+17 of them FAIL (~85 min of slots).
+
 Each entry: **pattern → impact → detection (for a supervisor) → fix**.
 
 ## A. Practice-only affordances (contest-day blockers)
@@ -232,6 +245,10 @@ Each entry: **pattern → impact → detection (for a supervisor) → fix**.
   re-run before reverting — good — but had no recorded band, so each
   decision was ad hoc.
 - **Fix:** 3 runs on one commit early → band in `NOTES.md`.
+- **Recurred (Run 3):** band ±5–10k around 165k, but most adopt/reject calls
+  were single runs. The memory-primary write path was rejected twice, each
+  time on one run (−14k, −25k). It was adopted later that afternoon as the
+  biggest late gain (+15k, repeated). See STRATEGY-LOOP §7.
 
 ### B5. Removing the recovery path
 - **Pattern:** a daemon-cleanup script stopped `amazon-ssm-agent` along
@@ -459,6 +476,10 @@ Each entry: **pattern → impact → detection (for a supervisor) → fix**.
 - **Fix (Run 2):** when per-host idle is lopsided for 2+ runs, the next
   slot changes **only** the rebalancing; when every run after the best is
   lower, re-run the best commit once before declaring a final layout.
+- **Recurred (Run 3), with the rule already in this skill:** two hosts at
+  91–100 % CPU, two at 10–25 %, from noon to the end. The per-host table was
+  first produced at T+5h13, when the human asked the supervisor. The rule was
+  prose; nothing in the wrapper produced the numbers (B22).
 
 ### B16. Harness not installable; turn ended with nothing to wake it (Run 2)
 - **Pattern:** at T+9 min the driver tried to write the HARNESS-SETUP
@@ -560,8 +581,148 @@ Each entry: **pattern → impact → detection (for a supervisor) → fix**.
   compare the same upstream reached through different fronts to separate
   front from app. Verify config per host directly, never through the LB.
 
+### B22. A rule in the skill that no tool enforced (Run 3)
+- **Pattern:** this skill was installed and said "every official run is
+  fully instrumented" and "lopsided hosts first". `node-metrics.sh` was
+  copied into the contest repo at T+17 min. It was never called from the
+  bench wrapper. Its first per-host CPU table came 5 hours later.
+- **Impact:** the main structural fault (B23) went unseen for most of the
+  contest. The same loss as Run 2.
+- **Detection:** the score log has no per-host columns, and the bench
+  wrapper does not reference the metrics script.
+- **Fix:** the official-run wrapper takes the metrics and refuses to append
+  a score row without them (BENCH-LOOP). Rules that matter must live in a
+  script, a hook or a required column, not only in prose.
+
+### B23. All writes funneled to the weakest host; knobs fought over it (Run 3)
+- **Pattern:** forwarding every write to one master host (2 vCPU) was right
+  early: 3.4k → 7.6k, removing ~100 ms per SQL from remote regions. It stayed
+  the topology all day. Later the master also ran the replication push,
+  signing and heavy reads. The DB host (2 vCPU) carried the DB, offloaded
+  image validation and cache misses. From T+3h, every priority/slot/fairness
+  knob moved score between regions without raising the total (≥ 5 times).
+- **Impact:** peak-day light writes (login, friend request, post) all
+  exceeded 1 s. Per-user-day score stayed ≈ 30–54 against the leader's
+  ≈ 70–80, while user growth was already near its cap. The plateau from T+6h
+  was this wall.
+- **Detection:** a seesaw result twice in a row; one host pegged while
+  others idle.
+- **Fix:** STRATEGY-LOOP §1–§3. Move work onto idle hosts. Re-open topology
+  options that keep writes in-region (`designing-isucon-architecture`,
+  multi-region block).
+
+### B24. Option rejected on a latency-only rating with a wrong capacity premise (Run 3)
+- **Pattern:** at T+3h an analysis rated region-local writes as "+2–3 %,
+  8–12 h, do not start". The rating counted RTT saved per writer only. It
+  dismissed capacity with "the master's CPU wall is home-region load". In
+  fact the master also processed every forwarded write. The same hour, the
+  first seesaw result arrived. Nobody linked the two.
+- **Impact:** the only design that removed the wall was never built. After
+  the contest, the human rebuilt the idea in minutes: commit in-region, push
+  bodies only to regions that can see them, wait for the ack writer-side.
+- **Fix:** STRATEGY-LOOP §2 and §4. Two-axis rating; each rejection records
+  its premises and an "overturned if" line, re-checked when a premise falls.
+
+### B25. Estimates from scratch, uncalibrated, used as a veto (Run 3)
+- **Pattern:** "8–12 h" for multi-primary regions. That day's logged
+  features of the same size took 10–40 min from first commit to green tests,
+  and 1.5–3.7 h to converge. Most listed components already existed
+  (watermarks, ack push, a write path that is primary in memory,
+  region-local images). The same document gave the incremental path an
+  optimistic estimate. In the strategist session, the human said
+  implementers were "several times faster than you assume". The written
+  rejection stayed.
+- **Impact:** a 2–4 h project was filed as impossible at T+3h20, with 4.5 h
+  left.
+- **Fix:** STRATEGY-LOOP §5. Velocity log, estimate by analog, delta not
+  whole, and a 30-min flag-off spike instead of an estimate-only veto.
+
+### B26. Stage 1 of a recommended plan built, merged and never run (Run 3)
+- **Pattern:** the rejection document recommended stage 1 (sessions
+  committed in-region, "60–90 min, +5–10k"). It was implemented during the
+  writing of that document and merged flag-off 17 minutes later. It never got
+  an official run.
+- **Fix:** a staged plan is filed only after stage 1 has a run
+  (STRATEGY-LOOP §6). The supervisor lists flag-off features with no run.
+
+### B27. Many big bets, one landed (Run 3)
+- **Pattern:** in parallel or in sequence: physical replicas (withdrawn at
+  T+45 min, rightly), logical replication (FAIL, then half score), local WAL
+  (FAIL, then −60k), full-history memory (4 FAILs of one type), a language
+  port (hybrid for 3 endpoints only), a late 600k redesign (started T+7h).
+  Only the write-behind path landed, at T+5h40. The breadth followed the
+  human's "try everything" direction.
+- **Impact:** integration load, environment-lock contention, FAIL slots, and
+  no single redesign finished.
+- **Fix:** STRATEGY-LOOP §9. At most two big bets, a kill date each; ask in
+  §0 how many big bets may run and who may move the freeze.
+
+### B28. Structural facts measured late (Run 3)
+- **Pattern:** the growth multiplier was estimated at 1.5–1.75×/day at T+55
+  min. It was really 2.6–2.9×, corrected at T+1h20. "The gap is
+  per-user-day quality, not user count" came at T+3h45. Its cause (friend
+  requests not committed inside the user's window, 77 % left pending) came at
+  T+6h50, 35 min before the freeze. Cross-region locality was measured from
+  the DB at T+7h.
+- **Fix:** STRATEGY-LOOP §8. Score regression and data-locality queries in
+  hours 1–2. The capacity owner re-derives the ceiling after each structural
+  change.
+
+### B29. Disk filled by an unbounded cache → three FAILs in a row (Run 3)
+- **Pattern:** an image disk cache grew to 33 GB. The proxy could no longer
+  buffer request bodies and returned 500 on uploads. That looked like an
+  intermittent app bug and cost three runs of bisecting (TLS mode, a memory
+  flag).
+- **Fix:** every cache has a size cap from the start. `df` on all hosts is
+  part of the post-run row. On an intermittent 5xx, check disk and memory
+  first.
+
+### B30. DB OOM-killed and the apps never came back (Run 3)
+- **Pattern:** idle-connection retention plus a large `max_wal_size` → the
+  DB was OOM-killed mid-run. systemd's `OOMPolicy=stop` stalled the stop, and
+  crash recovery took 2 min 15 s. The three apps panicked while starting
+  against the down DB, hit `StartLimitBurst` and stayed failed.
+- **Fix:** DB `OOMPolicy=continue`; app `StartLimitIntervalSec=0`,
+  `Restart=always`; a lower `OOMScoreAdjust` for the DB than for co-located
+  apps; record the minimum `MemAvailable` per host in the run row.
+
 ## C. Supervising a running session
 
 Moved to [SUPERVISING.md](SUPERVISING.md): what to watch, which alert rules
 paid off and which were noise in two observed runs, reliable stall
 detection, external health probes, and relaying facts (not consent).
+
+## D. Practices that held (Run 3)
+
+Keep these. They are why the 0-point outcomes never happened on the final run.
+
+- **Differential oracle for a distributed read model:** the DB path, the
+  primary's memory and a replica's memory were compared over a
+  1,500-step write sequence (diff 0). Integrity FAILs ("post visible that must
+  not be") were traced to a lease that a late heartbeat could extend. Bounding
+  the lease by the sender's send time fixed it, with no feed errors after.
+- **Fast withdrawal on evidence:** physical streaming replicas on the app
+  hosts saturated their disk IOPS replaying WAL (16.9k → 9.2k). They were
+  removed within ~35 min, with slots and watchdogs cleaned up.
+- **Off-host error attribution:** 503s on the notification stream were
+  absent from every host's access log. They correlated with total concurrent
+  connections across hosts, which put the cause in a shared upstream proxy.
+  Not chased further.
+- **Flags, default off; a bare deploy is the best config.** Every experiment
+  sat behind a flag. The deploy script's defaults were promoted only after
+  a win. A tagged fallback commit stayed deployable to the end.
+- **Final procedure decided in advance:** freeze time; final = the last run.
+  Stop rule: "pass and ≥ X → stop; else one more before T−10". Fallback
+  commit if the candidate FAILs. Reboot all hosts at once, then hash data
+  (rows + image store) against the pre-reboot snapshot. A read-only
+  `final-check.sh` (pending restarts, slots, temporary FW rules, disk,
+  profilers off). E2E and browser checks before the final run, never during
+  a run. One run with access logs and profilers off. Leftover sweep (SG never
+  touched, no ssh/tcpdump/socat left).
+- **Every run recorded** (commit, flags, per-region counts, finalist passes,
+  errors) in `NOTES.md` in Japanese. The post-mortem was possible only
+  because of this.
+- **Supervisor caught outward actions:** a portal question sent without
+  approval led to a memory rule ("no portal questions without the human").
+  The supervisor learned to route gray-zone items to the human, never through
+  the peer.

@@ -77,10 +77,14 @@ SCORES=${SCORES:-/tmp/isucon/SCORES.tsv}
 DEPLOY_CMD=${DEPLOY_CMD:-make deploy}
 BENCH_CMD=${BENCH_CMD:-scripts/portal-bench.sh run}     # PORTAL-BENCH.md
 METRICS=${METRICS:-scripts/node-metrics.sh}             # from tuning-isucon-linux-and-nginx
+HOSTS=${HOSTS:?export HOSTS="isu1 isu2 isu3" (ssh aliases) for node-metrics.sh}
 LOG_DIR=${LOG_DIR:-logs}
 mkdir -p "${LOCK%/*}" "$LOG_DIR"
-[[ -f $SCORES ]] || printf 'time\tcommit\tscore\tpass\terrors\tnote\n' >"$SCORES"
+[[ -f $SCORES ]] || printf 'time\tcommit\tscore\tpass\terrors\tidle_per_host\tnote\n' >"$SCORES"
 
+parse_idle() { # stdin: node-metrics.sh stop output (host usr% sys% soft% idle% ...) -> "isu1=12.3 isu2=..."
+  awk 'NR>1 && NF>=5 {printf "%s=%s ", $1, $5}'
+}
 parse_result() { # stdin: bench output -> "score<TAB>pass<TAB>errors" (adapt to the contest's format)
   grep -E 'pass=(true|false)' | tail -1 |
     sed -E 's/.*pass=(true|false).*スコア=([0-9]+).*種別エラー数=(map\[[^]]*\]).*/\2\t\1\t\3/'
@@ -93,14 +97,18 @@ out="$LOG_DIR/official-$(date +%H%M%S)-$commit.log"
 exec 9>"$LOCK"; flock 9   # background children (watchdogs, sleepers) must exec 9>&- or they hold the lock
 echo "$(date +%T) $commit OFFICIAL $NOTE" >| "$LOCK.owner"
 $DEPLOY_CMD >"$out.deploy" 2>&1 || { echo "deploy failed: $out.deploy" >&2; exit 4; }
-$METRICS start || true
+$METRICS start || { echo "metrics start failed: fix it, no uninstrumented official runs" >&2; exit 6; }
 timeout "${BENCH_TIMEOUT:-3600}" $BENCH_CMD >"$out" 2>&1; rc=$?
-$METRICS stop | tee "$out.metrics" || true
+$METRICS stop >"$out.metrics" 2>&1; cat "$out.metrics"
 [[ $rc == 10 ]] && { echo "PORTAL_AUTH_EXPIRED: ask the human to log in again" >&2; exit 10; }
 
 res=$(parse_result <"$out" || true)
 [[ -n $res ]] || { echo "no result line in $out" >&2; exit 5; }
-printf '%s\t%s\t%s\t%s\n' "$(date +%T)" "$commit" "$res" "$NOTE" >>"$SCORES"
+# capacity ledger: one idle% per host is required in the score row (STRATEGY-LOOP §1)
+idle=$(parse_idle <"$out.metrics" || true)
+[[ $(wc -w <<<"$idle") -ge $(wc -w <<<"$HOSTS") ]] || idle="NO-METRICS"
+printf '%s\t%s\t%s\t%s\t%s\n' "$(date +%T)" "$commit" "$res" "$idle" "$NOTE" >>"$SCORES"
+[[ $idle == NO-METRICS ]] && echo "WARN: score logged without per-host idle; fix before the next run" >&2
 best=$(awk -F'\t' 'NR>1 && $4=="true"{if($3>b)b=$3} END{print b+0}' "$SCORES")
 echo "RESULT commit=$commit $(tr '\t' ' ' <<<"$res") best=$best"
 { grep -oE 'CODE=[0-9]+' "$out" || true; } | sort | uniq -c | sort -rn
@@ -113,6 +121,14 @@ working; read the result when the background task reports back.
 
 - Compare `$out.metrics` (per-host CPU split, egress, allowance drops) with the
   previous official run before the score; it explains *why* the score moved.
+- The wrapper, not the agent's memory, collects the metrics. In Run 3 the
+  metrics script was in the repo all day but the wrapper never called it.
+  Lopsided hosts stayed unseen for 5 hours (OBSERVED-BARRIERS B22). Per-host
+  idle is a required score-log column, and `NO-METRICS` rows are a bug to fix
+  before the next enqueue.
+- Also log per run: the minimum `MemAvailable` and `df` use per host (an
+  unbounded cache filled a disk and cost three FAILs; an OOM-killed DB cost
+  one).
 - A jump is real only after it repeats; a decay on unchanged code points to a
   resource budget (cloud NIC allowance / CPU credits).
 - Any `CODE=` in two runs goes to `NOTES.md` as a tracked bug.

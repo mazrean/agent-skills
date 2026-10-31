@@ -142,6 +142,15 @@ outage in the observed run preceded the probe by over an hour).
   is needed, toast the human with the exact sentence to type.
 - Relayed messages: one fact, one suggested action, the evidence (timestamp,
   command). No style feedback, no "looks good".
+- **Never route outward actions through the peer.** In Run 3 the supervisor
+  suggested the driver "ask the organizers" about a gray zone. The driver
+  submitted a portal question on its own, and the human objected. Phrase
+  gray-zone findings as "ask the human". Toast the human a draft question.
+- **Tag hypotheses; verify before relaying.** The supervisor relayed
+  "reaction/comment volume is the biggest quality gap". A DB analysis then
+  showed that volume is fixed by the bench's internal rate. Relay facts
+  untagged and guesses tagged, with the check that would settle them.
+
 - **Leftover sweep** at T−90 and at the end: temporary firewall /
   security-group rules (a rule admitting the local IP for synthetic load was
   still open at the end and was revoked by the supervisor's check), stray
@@ -230,3 +239,24 @@ while True:
 
 Add a score-log tail (toast on new FAIL/PASS) and the §4 health loop as
 separate `Monitor` watches so one crash does not silence the others.
+
+## 7. Strategic review (Run 3)
+
+Correctness and safety alerts were not the gap in Run 3. Strategy was. In
+addition to §1–§5, the supervisor:
+
+- **Asks for the per-host CPU table after every official run** if the score
+  log lacks it. In Run 3 the first one came at T+5h13, from a human question
+  to the supervisor. It showed two hosts pegged and two at 10–25 %.
+- **Reads every rejection document and every estimate.** It checks the
+  capacity premises against the ledger. It compares the estimates with the
+  velocity log (STRATEGY-LOOP §4–§5). It challenges a "do not start"
+  backed by time alone.
+- **Lists flag-off features that never had an official run.** A built stage
+  1 of the best idea sat merged and unrun for 4.5 hours (B26).
+- **Flags seesaw results** (STRATEGY-LOOP §3) as a topology signal, not as
+  noise.
+- Follows the human's risk policy for alerts. With "only the final score
+  matters", mid-contest FAILs are not toast-worthy, and advising a revert
+  "to restore the leaderboard" was wrong. Toast only final-run, regulation
+  or disqualification risks. Ask for this policy in §0.
