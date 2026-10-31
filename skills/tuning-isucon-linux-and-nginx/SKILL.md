@@ -1,7 +1,7 @@
 ---
 name: tuning-isucon-linux-and-nginx
 description: Problem-independent infrastructure tuning for ISUCON-style multi-host web apps on Linux, distilled from a 17-hour measured tuning run (1,085 → ~2.9M). Covers a prebuilt nginx 1.28 + AWS-LC binary with syscall-saving patches (drop-in replacement, no build needed), TLS termination spread across hosts with netfilter DNAT + nftables flowtable, NIC IRQ / XPS / SO_INCOMING_CPU alignment, sysctl, cloud NIC allowance limits (EC2 ENA bw/pps), per-host cost measurement that does not need a benchmark run, transferable app patterns (in-memory + local WAL, long-poll, SSE, Go→Rust), and a prebuilt patched kernel + XDP load balancer that cuts front-host packet CPU (with when it pays), and a list of measured dead ends (XDP on stock ENA, NAPI deferral, NOTRACK). Use when tuning nginx/TLS/kernel/NIC on ISUCON hosts, when the app is no longer the only bottleneck, or when deciding which infra levers are worth contest time.
-version: 1.2.0
+version: 1.3.0
 ---
 
 # Tuning ISUCON Linux and nginx
@@ -46,6 +46,7 @@ which infra work is worth contest time.
 | 8 | NIC IRQ → CPU pinning, XPS, `pfifo_fast`, irqbalance off | 5 min | +2 % | [NET-TUNE.md](references/NET-TUNE.md) |
 | 9 | Worker ↔ CPU ↔ NIC queue alignment (`SO_INCOMING_CPU`, built into the prebuilt nginx) | 0 min with lever 5 | +1–2 % | [NGINX-AWSLC.md](references/NGINX-AWSLC.md) |
 | 10 | Watch cloud NIC allowances; compress large responses | 5 min | prevented a 15 % "mystery" regression | [NET-TUNE.md](references/NET-TUNE.md#cloud-nic-allowances) |
+| 10b | **Long inter-host RTT** (emulated regions): per-route `initcwnd`/`initrwnd` + larger default `tcp_rmem`; nginx `client_body_buffer_size` ≥ typical upload; cap every disk cache | 10 min | one RTT off 80–100 KB responses; best run +~6 %; prevented disk-full FAILs | [DEAD-ENDS.md](references/DEAD-ENDS.md#third-run-real-contest-4--2-vcpu-emulated-regions-100-ms-inter-host-rtt) |
 | 11 | App-side: in-memory state + local WAL, long-poll empty polls, app terminates TLS itself | hours | largest wins overall | [APP-PATTERNS.md](references/APP-PATTERNS.md) |
 | 12 | **Only if the front host is the bottleneck** (lowest idle, high soft%): prebuilt patched kernel (ENA XDP_TX on shared rings, batched doorbells) + XDP L4 LB instead of iptables TLS-LB | 20 min + reboot | front host −60 % doorbells, softirq 33→27 %, idle 4–7 → 14–16 %; +3 % score when weights were shifted to it, 0 % while another host was the limit | [KERNEL-XDP.md](references/KERNEL-XDP.md) |
 
@@ -65,6 +66,9 @@ which infra work is worth contest time.
 | Home-made TLS edge proxy replacing nginx | −4 % handshakes/s; 0-point run from h2-cancel bugs before it was dropped |
 | Read-local replica cluster across the TLS hosts | −8 %: replication CPU competes with TLS |
 | TLS session cache/ticket tuning when the client never resumes | no effect — check `$ssl_session_reused` first |
+| DB streaming standby on the app hosts | −45 %: WAL replay pinned the app hosts' disk IOPS |
+| `remote_apply` (synchronous) replication on every commit | score halved |
+| `proxy_request_buffering off` | FAIL |
 
 Details and numbers: [DEAD-ENDS.md](references/DEAD-ENDS.md).
 

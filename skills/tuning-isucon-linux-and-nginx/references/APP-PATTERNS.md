@@ -90,3 +90,31 @@ exactly (same headers, `gzip_static` choice by `Accept-Encoding`, SPA
 fallback, `ETag`/`Last-Modified` if the client revalidates). Load `public/`
 into memory at boot and diff every file's headers and body against nginx
 before switching.
+
+## 8. Replicated in-memory read model across hosts
+
+From a 4-host contest with ~100 ms between hosts and mandatory cross-host
+read-your-writes. This shape was the base of the 17k → 112k climb:
+
+- DB triggers append changed rows to a changelog table. One host tails it by
+  snapshot (`pg_current_snapshot()` diff, single statement, no gaps), applies
+  to memory and pushes numbered batches to the peers. A peer applies in order
+  and pulls missing sequence numbers from the pusher's buffer. It rebuilds on
+  an epoch change.
+- **Leases bound by the sender's clock.** A peer serves from memory only while
+  `min(receive time, send time) + 1 s` holds. The pusher may skip an
+  unresponsive peer only after the last lease it could have granted has
+  expired, plus clock skew. A lease extended by a late heartbeat caused
+  "must not be visible" integrity FAILs.
+- **Watermark-gated reads** instead of per-write acks: a peer answers a
+  read only when its applied watermark ≥ the request's arrival time (slack
+  0). Waits were 1–144 ms p50.
+- Writes return only after their own cycle is applied, and pushed or
+  watermarked. 4xx responses skip that barrier.
+- Ship blobs (images) only to regions where someone can see them, and
+  drop to "fetch on demand" when the queue overflows.
+- **Differential oracle before any official run:** replay a long random write
+  sequence (1,500 steps) and diff every GET between the DB path, the
+  primary's memory and a replica's memory. Diff 0 or no run.
+- Full-state dumps to peers must be rare and bounded. A 625k-row dump
+  repeated mid-run killed the score.

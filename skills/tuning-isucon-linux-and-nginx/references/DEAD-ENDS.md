@@ -47,6 +47,35 @@ requires `2 × queues ≤ max_num_io_queues` → with 2 queues it forces **1 que
 | `-march=<host cpu>` rebuild of the TLS library | 0 |
 | X25519 key reuse | 0.7 % of the profile, skipped |
 
+## Third run (real contest: 4 × 2 vCPU, emulated regions, ~100 ms inter-host RTT)
+
+Mostly single runs against a ±5–10k band around 165–195k. Read big drops as
+real and small ones as unproven.
+
+| Change | Result |
+|---|---|
+| Physical streaming standby of the shared DB on every app host (local reads) | 16.9k → 9.2k: replay pinned the app hosts' gp3 3000 IOPS (lag 1.6 GB); withdrawn in ~35 min |
+| Logical replication into app memory with `remote_apply` on every commit | 146k → 67k: every write waited on the slowest subscriber |
+| `proxy_request_buffering off` | FAIL (403 on fresh images, "use of closed connection" on POST) |
+| Removing the front nginx (app on :80) | 93k → 85k |
+| Full post history in memory, full dumps pushed to replicas | 9.5k: 625k-row dumps (15–33 s) 4× per run took the link and CPU |
+| Full-history memory on the 2-vCPU DB host | 4 FAILs of one type (post-run history reads timed out) |
+| Keeping idle DB connections + `max_wal_size` 12 GB | DB OOM-killed mid-run → FAIL |
+| `full_page_writes=off` | not tried: a torn page after the re-test reboot would stop PostgreSQL |
+| Dropping duplicate indexes | no effect |
+| BBR | not adopted: 30 MB transfers had no retransmits; the limit was RTT, not loss |
+| Widening one region's request slots / prioritizing forwarded writes | zero-sum between regions on the saturated master (see `running-isucon-as-an-agent` STRATEGY-LOOP §3) |
+
+Wins from the same run (kept in the final config):
+
+| Change | Result |
+|---|---|
+| Per-route `initcwnd 32 initrwnd 64` on the private range + `tcp_rmem` default 262144 | 80–100 KB responses over 100 ms RTT: 0.304 s → 0.205 s (one RTT removed) |
+| nginx `client_body_buffer_size 512k` (uploads of a few hundred KB stay in memory) | best run 199,880; that config averaged ~195.6k vs ~184k before |
+| Image disk cache with a size cap (6 GB) | without it the disk filled (33 GB), nginx could not buffer bodies → 500 → 3 FAILs |
+| DB unit `OOMPolicy=continue`, app `StartLimitIntervalSec=0`, DB `OOMScoreAdjust` below co-located apps | after one OOM the apps had stayed `failed` (panic on a down DB → start limit) |
+| `synchronous_commit=off` on the DB | within noise, kept: a clean shutdown/reboot flushes WAL, so data survives the re-test |
+
 ## App
 
 | Change | Result |
