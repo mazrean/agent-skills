@@ -21,6 +21,17 @@ Score = sum of (per-endpoint points × successful requests) + bonuses − penalt
 
 Implication: speed is worthless if you break the spec or lose state on reboot. Every optimization must preserve correctness and survive `systemctl restart`.
 
+**Compounding-user scoring variant.** Some problems score simulated users whose
+count grows each "day" by how satisfied they were the day before. A final
+peak day then multiplies everything. Split the score into **count** (growth per
+day) and **quality per user-day** (points earned before the window closes).
+Fit `score ≈ a × user-days + b × finalists + …` from the counts in the bench
+log in hour 1–2. In one contest the agent's growth was near the cap
+(2.8–2.9×/day) while quality was ≈ 30 against the winner's ≈ 70–80. The gap
+was peak-day latency of *light writes* (login, friend request, post) crossing
+1 s, which stopped users finishing their scripts. Watch per-day p90 of writes,
+not the run average.
+
 ## Phase 0: Pre-Competition Preparation (before the day)
 
 Time you spend before the competition is "free" — use it.
@@ -67,6 +78,7 @@ Once one instance saturates CPU, distribute load.
 2. **Run app on instance #1 + #2** behind nginx upstream on instance #3, or have nginx on app#1 round-robin to app#2.
 3. **Pin one expensive endpoint to a dedicated instance** (e.g. `/login` with bcrypt) if the benchmarker tolerates it.
 4. **Watch every box with `top` / Netdata simultaneously** — the bottleneck moves with each topology change.
+5. **Two hosts pegged and others idle = topology problem, not a tuning problem.** If a priority knob raises one request class and lowers another by the same amount, twice, stop tuning knobs and move work off the saturated host. With inter-host latency (multi-region problems), see the multi-region block in `designing-isucon-architecture`.
 
 See [OPTIMIZATION-PATTERNS.md](references/OPTIMIZATION-PATTERNS.md) for `nginx upstream` and DB-split snippets.
 
