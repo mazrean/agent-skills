@@ -129,12 +129,14 @@ Do **not** start applying changes yourself from inside this skill — execution 
 4. **The produced skill is the contract.** Anything missing from the produced skill will not be executed correctly. Embed, do not handwave.
 5. **Reboot is a phase, not a postscript.** `DEPLOY.md` ends with a reboot test as the last verification. No "we will add this later".
 6. **One problem, one apply-skill.** Do not bundle multiple ISUCON problems — slugs collide and the skill becomes unwieldy.
+7. **Rate topology on latency *and* capacity.** For each option, write which host's CPU/IOPS/NIC the hot work lands on, next to the RTTs it saves. A latency-only rating rejected the winning multi-region topology in a real contest (see DESIGN-DIMENSIONS, multi-region variant). Record the premises of every rejected option and when they would overturn it.
 
 ## Checklist (before declaring the design complete)
 
 - [ ] `CONSTRAINTS.md` lists every immutable item with absolute paths.
 - [ ] `BASELINE.md` has alp top-5, query-digest top-5, pprof top-5, per-instance peak metrics.
 - [ ] `DESIGN.md` covers all five dimensions, each justified by a baseline number.
+- [ ] Topology choice states the per-host capacity budget (expected idle % per host at peak), not only latency.
 - [ ] Constraint matrix shows zero RED rows.
 - [ ] Apply-skill is self-contained — no step reads "see codebase" without a path.
 - [ ] Apply-skill includes a reboot test as the last step of `DEPLOY.md`.

@@ -31,6 +31,40 @@ isu3: mysql (3306) + redis (6379)
 client → isu1:80 → upstream{isu1:8080, isu2:8080} → isu3:3306 / isu3:6379
 ```
 
+### Multi-region variant (inter-host latency imposed by a router)
+
+Some problems put app hosts in emulated regions. Each region's users reach
+their own host, and host-to-host traffic pays ~100 ms RTT plus a bandwidth
+cap. Read-your-writes across regions is still mandatory. In one real
+contest the topology choice set the ceiling at about a third of the winner.
+
+**Decision input is two axes, not one:** RTT per critical request **and**
+which host's CPU/IOPS/NIC the work lands on. With 2-vCPU hosts the capacity
+axis usually decides. Fill a per-host idle table from a real run before
+choosing.
+
+| Option | Latency | Capacity | Observed |
+|--------|---------|----------|----------|
+| **Single write master, remote writes forwarded** | remote writes pay 1 RTT | every write lands on one host; priority/slot knobs become zero-sum between regions | good early (×2), then the wall: master and DB host at 91–100 % CPU, other two at 10–25 % |
+| **Read-local in-memory replica + watermark** (master pushes changes; a remote read waits until the replica's watermark ≥ the request's arrival time) | local reads ~0 wait | push CPU on the master; replicas cheap | large win; keep the watermark slack at 0 and bound leases by the sender's clock |
+| **Region-local commit + audience-based replication** (a write commits in its own region; bodies go only to regions that can see them; small relation tables go everywhere; the writer waits for the remote ack) | local-only writes 0 RTT; writes with remote readers pay one round trip, writer-side | spreads writes over all app hosts | not built in the contest; the post-mortem's best candidate. In that seed data ~90 % of one region's users had no remote friend |
+| Physical streaming standby on each app host | local reads | standby replay eats app-host disk IOPS (gp3 3000) | −45 %, withdrawn |
+| Logical replication with `remote_apply` on every commit | every write waits for the slowest subscriber | — | score halved |
+
+Invariants for any multi-region design:
+- A read in region B that may depend on a write in region A pays at least
+  one-way latency somewhere, either delaying the writer's response or
+  making the reader wait. **Paying writer-side keeps the many readers free**,
+  and only writes that have a remote reader pay.
+- "Who can see it" goes beyond friends: friends-of-friends (2 hops),
+  followers, public (= all regions). Replicate relation changes (friend,
+  block, follow) to all regions. When a relation is created, push the
+  newly visible existing items before acking.
+- Logins that invalidate old sessions are writes with remote readers.
+- `initialize` must reset every region's store.
+- Measure locality from the seed data in hour 1: the cross-region relation
+  share and the visibility-mode mix.
+
 ## 2. Storage
 
 How data is held at rest. The reference is always MySQL; the question is what to *change*.
